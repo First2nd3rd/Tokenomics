@@ -1,4 +1,4 @@
-# DailyToken
+# Tokenomics
 
 A super-lightweight native macOS **menu bar** app that turns your coding-agent
 token usage into a live "market terminal" — at-a-glance burn rate, today's
