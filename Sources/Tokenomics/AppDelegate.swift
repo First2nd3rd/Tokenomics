@@ -1,8 +1,8 @@
 import AppKit
 
-/// Phase 1: a menu bar item showing the latest day's token total, refreshing
-/// on a timer, with a dropdown of details. Presentation only — all numbers
-/// come from `UsageStore` / the provider layer.
+/// The menu bar item: shows today's running token total, refreshing on a timer,
+/// with a dropdown of projection and comparison detail. Presentation only — all
+/// numbers come from `Dashboard` / the provider layer.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let refreshInterval: TimeInterval = 60
 
@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "🪙 …"
 
-        rebuildMenu(snapshot: nil, error: nil)
+        rebuildMenu(dashboard: nil, error: nil)
         refresh()
 
         timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
@@ -27,34 +27,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             switch result {
             case .success(let snapshot):
-                let tokens = snapshot.latest?.totalTokens ?? 0
+                let dashboard = Dashboard.make(from: snapshot, now: Date())
+                let tokens = dashboard.headline?.totalTokens ?? 0
                 self.statusItem.button?.title = "🪙 " + Format.tokensShort(tokens)
-                self.rebuildMenu(snapshot: snapshot, error: nil)
+                self.rebuildMenu(dashboard: dashboard, error: nil)
             case .failure(let error):
                 self.statusItem.button?.title = "🪙 —"
-                self.rebuildMenu(snapshot: nil, error: error)
+                self.rebuildMenu(dashboard: nil, error: error)
             }
         }
     }
 
     // MARK: - Menu
 
-    private func rebuildMenu(snapshot: UsageSnapshot?, error: Error?) {
+    private func rebuildMenu(dashboard: Dashboard?, error: Error?) {
         let menu = NSMenu()
 
-        if let today = snapshot?.latest {
-            menu.addItem(info("📅 \(today.date)"))
-            menu.addItem(info("Tokens   \(Format.grouped(today.totalTokens))"))
-            menu.addItem(info("Cost     \(Format.cost(today.totalCost))"))
+        if let d = dashboard, let h = d.headline {
+            let dayLabel = d.isToday ? "Today" : h.date
+            menu.addItem(info("📅 \(dayLabel) · \(h.date)"))
 
-            if let prev = snapshot?.previous,
-               let delta = Format.deltaPct(today.totalTokens, vs: prev.totalTokens) {
-                menu.addItem(info("vs \(prev.date)   \(delta)"))
+            let usedLabel = d.isToday ? "Used so far" : "Used"
+            menu.addItem(info("\(usedLabel)   \(Format.grouped(h.totalTokens))   \(Format.cost(h.totalCost))"))
+
+            if let pt = d.projectedTokens, let pc = d.projectedCost {
+                menu.addItem(info("Projected    ~\(Format.tokensShort(pt))   ~\(Format.cost(pc))"))
+                // Deltas compare today's *projected* end-of-day total against prior
+                // *completed* days — intentional "where today is heading" framing.
+                if let avg = d.avgTokens, let delta = Format.deltaPct(pt, vs: avg) {
+                    menu.addItem(info("    vs 7-day avg   \(delta)"))
+                }
+                if let prev = d.previousDay, let delta = Format.deltaPct(pt, vs: prev.totalTokens) {
+                    menu.addItem(info("    vs \(prev.date)   \(delta)"))
+                }
+            } else if d.isToday {
+                menu.addItem(info("Projected    — (warming up)"))
             }
 
-            if !today.models.isEmpty {
+            menu.addItem(.separator())
+            if let avg = d.avgTokens, let avgCost = d.avgCost {
+                menu.addItem(info("7-day avg    \(Format.tokensShort(avg))   \(Format.cost(avgCost))"))
+            }
+            if let prev = d.previousDay {
+                menu.addItem(info("\(prev.date)   \(Format.tokensShort(prev.totalTokens))   \(Format.cost(prev.totalCost))"))
+            }
+
+            if !h.models.isEmpty {
                 menu.addItem(.separator())
-                menu.addItem(info("Models: \(today.models.joined(separator: ", "))"))
+                menu.addItem(info("Models: \(h.models.joined(separator: ", "))"))
             }
         } else if let error {
             menu.addItem(info("⚠︎ \(error.localizedDescription)"))
