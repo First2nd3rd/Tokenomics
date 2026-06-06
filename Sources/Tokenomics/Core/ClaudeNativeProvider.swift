@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Reads Claude Code usage directly from the local JSONL logs — no ccusage / Node.
 ///
@@ -22,6 +23,13 @@ final class ClaudeNativeProvider: UsageProvider {
     private let queue = DispatchQueue(label: "tokenomics.claude-reader", qos: .utility)
     /// path -> parsed records, reused while the file's mtime + size are unchanged.
     private var fileCache: [String: CachedFile] = [:]
+    private var didLoadDiskCache = false
+    private var lastSavedAt = Date.distantPast
+
+    /// Bump when the persisted record shape or parsing semantics change.
+    private static let cacheVersion = 1
+    /// Don't rewrite the on-disk cache more often than this.
+    private static let saveThrottle: TimeInterval = 120
 
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
         queue.async {
@@ -50,15 +58,23 @@ final class ClaudeNativeProvider: UsageProvider {
     /// only files whose mtime/size changed; unchanged files reuse cached records, so
     /// the recurring refresh stays cheap once the first full scan is warm.
     private func cachedRecords() -> [Record] {
+        if !didLoadDiskCache {
+            fileCache = Self.loadDiskCache() ?? [:]
+            didLoadDiskCache = true
+        }
+
         let files = Self.claudeProjectRoots().flatMap { Self.jsonlFiles(under: $0) }
         let fm = FileManager.default
 
         var nextCache: [String: CachedFile] = [:]
         var records: [Record] = []
+        var changed = false
         for file in files {
             let path = file.path
             let attrs = try? fm.attributesOfItem(atPath: path)
-            let mtime = (attrs?[.modificationDate] as? Date) ?? .distantPast
+            // Whole-second epoch (Int) so it round-trips exactly through JSON, unlike
+            // a Double Date; paired with size it reliably detects appends.
+            let mtime = Int((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)
             let size = (attrs?[.size] as? Int) ?? -1
 
             let cached: CachedFile
@@ -66,11 +82,18 @@ final class ClaudeNativeProvider: UsageProvider {
                 cached = hit
             } else {
                 cached = CachedFile(mtime: mtime, size: size, records: Self.parseFile(file))
+                changed = true
             }
             nextCache[path] = cached
             records.append(contentsOf: cached.records)
         }
-        fileCache = nextCache   // entries for deleted files fall away
+        if nextCache.count != fileCache.count { changed = true }   // files removed
+        fileCache = nextCache
+
+        if changed, Date().timeIntervalSince(lastSavedAt) > Self.saveThrottle {
+            Self.saveDiskCache(nextCache)
+            lastSavedAt = Date()
+        }
         return records
     }
 
@@ -119,7 +142,7 @@ final class ClaudeNativeProvider: UsageProvider {
 
             var key: String?
             if let id = line.message?.id, let requestId = line.requestId {
-                key = id + ":" + requestId
+                key = hashedKey(id, requestId)
             }
             records.append(Record(key: key, entry: entry))
         }
@@ -187,12 +210,71 @@ final class ClaudeNativeProvider: UsageProvider {
         return files
     }
 
+    // MARK: - Dedup key
+
+    /// 12-byte SHA-256 prefix of `id:requestId`, base64 — compact and
+    /// collision-free in practice (~1e-17 at a million messages).
+    private static func hashedKey(_ id: String, _ requestId: String) -> String {
+        let digest = SHA256.hash(data: Data((id + ":" + requestId).utf8))
+        return Data(digest.prefix(12)).base64EncodedString()
+    }
+
+    // MARK: - Disk persistence
+
+    /// One NDJSON line = one source file's parse result. Streaming line-by-line
+    /// keeps load memory bounded — decoding a single giant JSON object instead
+    /// builds a ~30x intermediate tree (measured: 4MB file -> ~120MB peak). The
+    /// format version lives in the filename, so a bump silently ignores old files.
+    private struct FileCacheLine: Codable {
+        let f: String       // source file path
+        let t: Int          // mtime (epoch seconds)
+        let s: Int          // size
+        let rs: [Record]
+    }
+
+    private static var diskCacheURL: URL? {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        else { return nil }
+        let dir = caches.appendingPathComponent("me.stfang.tokenomics", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("records-v\(cacheVersion).ndjson")
+    }
+
+    private static func loadDiskCache() -> [String: CachedFile]? {
+        guard let url = diskCacheURL,
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let decoder = JSONDecoder()
+        var cache: [String: CachedFile] = [:]
+        LineReader.forEachLine(of: url) { lineData in
+            guard let line = try? decoder.decode(FileCacheLine.self, from: lineData) else { return }
+            cache[line.f] = CachedFile(mtime: line.t, size: line.s, records: line.rs)
+        }
+        return cache.isEmpty ? nil : cache
+    }
+
+    private static func saveDiskCache(_ files: [String: CachedFile]) {
+        guard let url = diskCacheURL else { return }
+        let encoder = JSONEncoder()
+        var out = Data()
+        for (path, cached) in files {
+            autoreleasepool {
+                let line = FileCacheLine(f: path, t: cached.mtime, s: cached.size, rs: cached.records)
+                if let encoded = try? encoder.encode(line) {
+                    out.append(encoded)
+                    out.append(0x0A)
+                }
+            }
+        }
+        try? out.write(to: url, options: .atomic)
+    }
+
 }
 
 // MARK: - Per-day accumulation
 
-/// A single message's usage, tagged with its local day.
-private struct Entry {
+/// A single message's usage, tagged with its local day. Short coding keys keep
+/// the persisted cache compact.
+private struct Entry: Codable {
     let day: String
     let minute: Int          // local minute-of-day, 0…1439
     let input: Int
@@ -201,19 +283,29 @@ private struct Entry {
     let cacheRead: Int
     let model: String?
     var tokens: Int { input + output + cacheCreation + cacheRead }
+
+    enum CodingKeys: String, CodingKey {
+        case day = "d", minute = "n", input = "i", output = "o"
+        case cacheCreation = "w", cacheRead = "r", model = "m"
+    }
 }
 
 /// One usage line's contribution plus its dedup key (nil = can't be deduped).
-private struct Record {
+private struct Record: Codable {
     let key: String?
     let entry: Entry
+
+    enum CodingKeys: String, CodingKey { case key = "k", entry = "e" }
 }
 
-/// Cached parse result for a file, valid while its mtime + size are unchanged.
-private struct CachedFile {
-    let mtime: Date
+/// Cached parse result for a file, valid while its mtime (epoch seconds) + size
+/// are unchanged.
+private struct CachedFile: Codable {
+    let mtime: Int
     let size: Int
     let records: [Record]
+
+    enum CodingKeys: String, CodingKey { case mtime = "t", size = "s", records = "rs" }
 }
 
 private struct DayAccumulator {
