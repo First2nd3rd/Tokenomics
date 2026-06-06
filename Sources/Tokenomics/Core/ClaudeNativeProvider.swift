@@ -103,12 +103,10 @@ final class ClaudeNativeProvider: UsageProvider {
 
     /// Parse one JSONL file into usage records (cross-file dedup happens later).
     private static func parseFile(_ file: URL) -> [Record] {
-        guard let data = try? Data(contentsOf: file) else { return [] }
         let decoder = JSONDecoder()
         var records: [Record] = []
 
-        for lineSlice in data.split(separator: 0x0A) where !lineSlice.isEmpty {
-            let lineData = Data(lineSlice)
+        LineReader.forEachLine(of: file) { lineData in
             // Fast path: only assistant usage lines contain "input_tokens" — skip the
             // far more numerous user/tool/thinking lines before the JSON decode.
             guard lineData.range(of: usageNeedle) != nil,
@@ -118,7 +116,7 @@ final class ClaudeNativeProvider: UsageProvider {
                   let output = usage.output_tokens,
                   let timestamp = line.timestamp,
                   let dm = DayBucket.localDayMinute(from: timestamp)
-            else { continue }
+            else { return }
 
             // ccusage tags "fast" (priority-tier) turns by appending "-fast" to the
             // model name, which carries the 6x price; mirror that here.

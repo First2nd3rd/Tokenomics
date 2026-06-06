@@ -18,6 +18,10 @@ if CommandLine.arguments.contains("--dump-curve") {
     DumpCurve.run()
     exit(0)
 }
+if CommandLine.arguments.contains("--scan-only") {
+    ScanOnly.run()
+    exit(0)
+}
 if CommandLine.arguments.contains("--bench") {
     Bench.run()
     exit(0)

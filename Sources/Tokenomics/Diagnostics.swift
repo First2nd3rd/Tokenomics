@@ -43,6 +43,24 @@ enum DumpIntraday {
     }
 }
 
+/// Streams every Claude JSONL line WITHOUT decoding or storing — isolates the
+/// LineReader's memory behaviour from parsing. Invoked with `--scan-only`.
+enum ScanOnly {
+    static func run() {
+        var lines = 0
+        var bytes = 0
+        for root in ClaudeNativeProvider.claudeProjectRoots() {
+            for file in ClaudeNativeProvider.jsonlFiles(under: root) {
+                LineReader.forEachLine(of: file) { lineData in
+                    lines += 1
+                    bytes += lineData.count
+                }
+            }
+        }
+        FileHandle.standardOutput.write(Data("lines=\(lines) bytes=\(bytes)\n".utf8))
+    }
+}
+
 /// Prints the cumulative-curve summary (today final, typical final, projected) to
 /// sanity-check the prediction. Invoked with `--dump-curve`.
 enum DumpCurve {

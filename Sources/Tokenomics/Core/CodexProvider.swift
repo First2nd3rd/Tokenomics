@@ -34,16 +34,15 @@ final class CodexProvider: UsageProvider {
         var buckets = Array(repeating: 0, count: 1440)
 
         for file in rolloutFiles() {
-            guard let data = try? Data(contentsOf: file) else { continue }
             var prevInput = 0, prevOutput = 0
-            for lineSlice in data.split(separator: 0x0A) where !lineSlice.isEmpty {
-                guard let line = try? decoder.decode(CodexLine.self, from: Data(lineSlice)),
+            LineReader.forEachLine(of: file) { lineData in
+                guard let line = try? decoder.decode(CodexLine.self, from: lineData),
                       line.type == "event_msg",
                       line.payload?.type == "token_count",
                       let usage = line.payload?.info?.total_token_usage,
                       let timestamp = line.timestamp,
                       let dm = DayBucket.localDayMinute(from: timestamp)
-                else { continue }
+                else { return }
 
                 let deltaInput = max(0, usage.input_tokens - prevInput)
                 let deltaOutput = max(0, usage.output_tokens - prevOutput)
@@ -118,16 +117,15 @@ final class CodexProvider: UsageProvider {
         var byDay: [String: [Int]] = [:]
 
         for file in rolloutFiles() {
-            guard let data = try? Data(contentsOf: file) else { continue }
             var prevInput = 0, prevOutput = 0
-            for lineSlice in data.split(separator: 0x0A) where !lineSlice.isEmpty {
-                guard let line = try? decoder.decode(CodexLine.self, from: Data(lineSlice)),
+            LineReader.forEachLine(of: file) { lineData in
+                guard let line = try? decoder.decode(CodexLine.self, from: lineData),
                       line.type == "event_msg",
                       line.payload?.type == "token_count",
                       let usage = line.payload?.info?.total_token_usage,
                       let timestamp = line.timestamp,
                       let dm = DayBucket.localDayMinute(from: timestamp)
-                else { continue }
+                else { return }
 
                 let deltaInput = max(0, usage.input_tokens - prevInput)
                 let deltaOutput = max(0, usage.output_tokens - prevOutput)
