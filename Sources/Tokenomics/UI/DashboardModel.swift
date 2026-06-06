@@ -16,6 +16,11 @@ final class DashboardModel: ObservableObject {
     @Published var rate5min: [RatePoint] = []
     @Published var nowHour: Double = 24      // local hour-of-day, drives the x-axis extent
 
+    // Cumulative chart lines.
+    @Published var cumToday: [CumPoint] = []
+    @Published var cumTypical: [CumPoint] = []
+    @Published var cumPredicted: [CumPoint] = []
+
     private static let bucketMinutes = 5
 
     /// Collapse 1440 per-minute token counts into 5-minute buckets for the chart.

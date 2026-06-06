@@ -61,8 +61,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        store.refreshIntraday { [weak self] minutes in
-            self?.model.updateRate(fromMinuteTokens: minutes)
+        store.refreshMatrix(lastDays: 14) { [weak self] matrix in
+            guard let self else { return }
+            let now = Date()
+            let todayKey = Dashboard.dayKey(now, calendar: .current)
+            self.model.updateRate(fromMinuteTokens: matrix[todayKey] ?? Array(repeating: 0, count: 1440))
+
+            let series = IntradayCurve.build(matrix: matrix, now: now)
+            self.model.cumToday = series.today
+            self.model.cumTypical = series.typical
+            self.model.cumPredicted = series.predicted
         }
     }
 
