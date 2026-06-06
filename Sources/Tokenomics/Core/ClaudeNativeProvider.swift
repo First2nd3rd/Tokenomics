@@ -16,62 +16,106 @@ import Foundation
 final class ClaudeNativeProvider: UsageProvider {
     let id = "claude-native"
 
+    private static let usageNeedle = Data("input_tokens".utf8)
+
+    /// Serializes reads and guards `fileCache` (no concurrent refreshes).
+    private let queue = DispatchQueue(label: "tokenomics.claude-reader", qos: .utility)
+    /// path -> parsed records, reused while the file's mtime + size are unchanged.
+    private var fileCache: [String: CachedFile] = [:]
+
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
-        DispatchQueue.global(qos: .utility).async {
-            do {
-                completion(.success(try Self.readDaily()))
-            } catch {
-                completion(.failure(error))
-            }
+        queue.async {
+            completion(.success(self.readDaily()))
         }
     }
 
     // MARK: - Reading
 
-    static func readDaily() throws -> [DailyUsage] {
-        let files = claudeProjectRoots().flatMap { jsonlFiles(under: $0) }
-        let decoder = JSONDecoder()
+    /// Aggregates per-day usage, re-parsing only files whose mtime/size changed
+    /// since the last call; unchanged files reuse their cached records. This keeps
+    /// the recurring 60s refresh cheap once the first full scan is warm.
+    private func readDaily() -> [DailyUsage] {
+        let files = Self.claudeProjectRoots().flatMap { Self.jsonlFiles(under: $0) }
+        let fm = FileManager.default
 
-        // One assistant turn is written as several JSONL lines (one per content
-        // block) that share `message.id:requestId` and identical input/cache, but a
-        // STREAMING output_tokens that grows to its final value on the last line.
-        // So per message we keep the representative with the largest output_tokens.
+        var nextCache: [String: CachedFile] = [:]
+        var records: [Record] = []
+
+        for file in files {
+            let path = file.path
+            let attrs = try? fm.attributesOfItem(atPath: path)
+            let mtime = (attrs?[.modificationDate] as? Date) ?? .distantPast
+            let size = (attrs?[.size] as? Int) ?? -1
+
+            let cached: CachedFile
+            if let hit = fileCache[path], hit.mtime == mtime, hit.size == size {
+                cached = hit
+            } else {
+                cached = CachedFile(mtime: mtime, size: size, records: Self.parseFile(file))
+            }
+            nextCache[path] = cached
+            records.append(contentsOf: cached.records)
+        }
+        fileCache = nextCache   // entries for deleted files fall away
+
+        return Self.aggregate(records)
+    }
+
+    /// Parse one JSONL file into usage records (cross-file dedup happens later).
+    private static func parseFile(_ file: URL) -> [Record] {
+        guard let data = try? Data(contentsOf: file) else { return [] }
+        let decoder = JSONDecoder()
+        var records: [Record] = []
+
+        for lineSlice in data.split(separator: 0x0A) where !lineSlice.isEmpty {
+            let lineData = Data(lineSlice)
+            // Fast path: only assistant usage lines contain "input_tokens" — skip the
+            // far more numerous user/tool/thinking lines before the JSON decode.
+            guard lineData.range(of: usageNeedle) != nil,
+                  let line = try? decoder.decode(Line.self, from: lineData),
+                  let usage = line.message?.usage,
+                  let input = usage.input_tokens,
+                  let output = usage.output_tokens,
+                  let timestamp = line.timestamp,
+                  let day = localDay(from: timestamp)
+            else { continue }
+
+            // ccusage tags "fast" (priority-tier) turns by appending "-fast" to the
+            // model name, which carries the 6x price; mirror that here.
+            var model = line.message?.model
+            if usage.speed == "fast", let base = model { model = base + "-fast" }
+
+            let entry = Entry(
+                day: day,
+                input: input,
+                output: output,
+                cacheCreation: usage.cache_creation_input_tokens ?? 0,
+                cacheRead: usage.cache_read_input_tokens ?? 0,
+                model: model
+            )
+
+            var key: String?
+            if let id = line.message?.id, let requestId = line.requestId {
+                key = id + ":" + requestId
+            }
+            records.append(Record(key: key, entry: entry))
+        }
+        return records
+    }
+
+    /// Cross-file dedup (keep the largest-output line per message) + per-day totals.
+    private static func aggregate(_ records: [Record]) -> [DailyUsage] {
+        // One assistant turn spans several JSONL lines sharing `message.id:requestId`
+        // with identical input/cache but a growing output_tokens; keep the largest.
         // Lines missing either id can't be deduped (kept individually, like ccusage).
         var best: [String: Entry] = [:]
         var keyless: [Entry] = []
-
-        for file in files {
-            guard let data = try? Data(contentsOf: file) else { continue }
-            for lineSlice in data.split(separator: 0x0A) where !lineSlice.isEmpty {
-                guard let line = try? decoder.decode(Line.self, from: Data(lineSlice)),
-                      let usage = line.message?.usage,
-                      let input = usage.input_tokens,
-                      let output = usage.output_tokens,
-                      let timestamp = line.timestamp,
-                      let day = localDay(from: timestamp)
-                else { continue }
-
-                // ccusage tags "fast" (priority-tier) turns by appending "-fast" to
-                // the model name, which carries the 6x price; mirror that here.
-                var model = line.message?.model
-                if usage.speed == "fast", let base = model { model = base + "-fast" }
-
-                let entry = Entry(
-                    day: day,
-                    input: input,
-                    output: output,
-                    cacheCreation: usage.cache_creation_input_tokens ?? 0,
-                    cacheRead: usage.cache_read_input_tokens ?? 0,
-                    model: model
-                )
-
-                if let id = line.message?.id, let requestId = line.requestId {
-                    let key = id + ":" + requestId
-                    if let existing = best[key], existing.output >= output { continue }
-                    best[key] = entry
-                } else {
-                    keyless.append(entry)
-                }
+        for record in records {
+            if let key = record.key {
+                if let existing = best[key], existing.output >= record.entry.output { continue }
+                best[key] = record.entry
+            } else {
+                keyless.append(record.entry)
             }
         }
 
@@ -160,7 +204,7 @@ final class ClaudeNativeProvider: UsageProvider {
 
 // MARK: - Per-day accumulation
 
-/// A single deduplicated message's usage, tagged with its local day.
+/// A single message's usage, tagged with its local day.
 private struct Entry {
     let day: String
     let input: Int
@@ -168,6 +212,19 @@ private struct Entry {
     let cacheCreation: Int
     let cacheRead: Int
     let model: String?
+}
+
+/// One usage line's contribution plus its dedup key (nil = can't be deduped).
+private struct Record {
+    let key: String?
+    let entry: Entry
+}
+
+/// Cached parse result for a file, valid while its mtime + size are unchanged.
+private struct CachedFile {
+    let mtime: Date
+    let size: Int
+    let records: [Record]
 }
 
 private struct DayAccumulator {
