@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.statusItem.button?.title = "🪙 " + Format.tokensShort(dashboard.headline?.totalTokens ?? 0)
                 self.model.headline = Self.headlineText(dashboard)
                 self.model.subtitle = Self.subtitleText(dashboard)
+                self.model.models = dashboard.headline?.models ?? []
             case .failure:
                 self.statusItem.button?.title = "🪙 —"
                 self.model.headline = "—"
@@ -72,8 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let comps = Calendar.current.dateComponents([.hour, .minute], from: now)
             let nowMinute = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
-            let todayMinutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: 0, count: 1440)
-            self.model.updateRate(fromMinuteTokens: todayMinutes, nowMinute: nowMinute)
+            let todayMinutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: TokenCounts(), count: 1440)
+            self.model.updateRate(today: todayMinutes, nowMinute: nowMinute)
 
             let series = IntradayCurve.build(matrix: matrix, now: now)
             self.model.cumToday = series.today

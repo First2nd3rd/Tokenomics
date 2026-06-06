@@ -9,6 +9,8 @@ struct DashboardView: View {
     var onSettings: () -> Void
     var onQuit: () -> Void
 
+    @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
+
     /// End the x-axis at "now" (the last bucket's position), so there's no empty
     /// tail and the right edge advances each refresh.
     private var rateUpperBound: Double {
@@ -28,8 +30,9 @@ struct DashboardView: View {
                 }
             }
 
-            sectionLabel("Today · tokens / 5 min")
+            sectionLabel(rateTitle)
             rateChart
+            if rateStyle == .stacked { rateLegend }
 
             sectionLabel("Cumulative · today vs typical → projected")
             cumulativeChart
@@ -55,11 +58,35 @@ struct DashboardView: View {
         Text(text).font(.caption2).foregroundStyle(.secondary)
     }
 
-    // MARK: - Rate chart (intraday, area)
+    // MARK: - Rate chart (intraday, smooth stack by token type)
 
-    private var rateChart: some View {
+    private struct Band {
+        let name: String
+        let color: Color
+        let value: (RatePoint) -> Int
+    }
+
+    /// Stack order (bottom → top) + colors; also drives the legend.
+    private static let bands: [Band] = [
+        Band(name: "Cache read",  color: .blue,   value: { $0.cacheRead }),
+        Band(name: "Cache write", color: .teal,   value: { $0.cacheCreation }),
+        Band(name: "Input",       color: .green,  value: { $0.input }),
+        Band(name: "Output",      color: .orange, value: { $0.output }),
+    ]
+
+    private var rateTitle: String {
+        model.models.isEmpty ? "Today · tokens / 5 min"
+                             : "Today · " + model.models.joined(separator: ", ")
+    }
+
+    @ViewBuilder private var rateChart: some View {
+        if rateStyle == .stacked { stackedRateChart } else { lineRateChart }
+    }
+
+    /// Default: a single accent line over a faint area fill (the total per bucket).
+    private var lineRateChart: some View {
         Chart(model.rate5min) { point in
-            AreaMark(x: .value("Hour", point.hour), y: .value("Tokens", point.tokens))
+            AreaMark(x: .value("Time", point.hour), y: .value("Tokens", point.total))
                 .interpolationMethod(.monotone)
                 .foregroundStyle(
                     .linearGradient(
@@ -67,7 +94,7 @@ struct DashboardView: View {
                         startPoint: .top, endPoint: .bottom
                     )
                 )
-            LineMark(x: .value("Hour", point.hour), y: .value("Tokens", point.tokens))
+            LineMark(x: .value("Time", point.hour), y: .value("Tokens", point.total))
                 .interpolationMethod(.monotone)
                 .foregroundStyle(Color.accentColor)
                 .lineStyle(StrokeStyle(lineWidth: 1.5))
@@ -75,7 +102,37 @@ struct DashboardView: View {
         .chartXScale(domain: 0...rateUpperBound)
         .chartXAxis { hourAxis }
         .chartYAxis { tokenAxis }
-        .frame(width: 380, height: 92)
+        .frame(width: 380, height: 84)
+    }
+
+    /// Optional: a smooth area stacked by token type (cache-read usually dominates).
+    private var stackedRateChart: some View {
+        Chart(model.rate5min) { point in
+            ForEach(Self.bands, id: \.name) { band in
+                AreaMark(x: .value("Time", point.hour), y: .value("Tokens", band.value(point)))
+                    .foregroundStyle(by: .value("Type", band.name))
+                    .interpolationMethod(.monotone)
+            }
+        }
+        .chartForegroundStyleScale(domain: Self.bands.map(\.name), range: Self.bands.map(\.color))
+        .chartLegend(.hidden)
+        .chartXScale(domain: 0...rateUpperBound)
+        .chartXAxis { hourAxis }
+        .chartYAxis { tokenAxis }
+        .frame(width: 380, height: 84)
+    }
+
+    private var rateLegend: some View {
+        HStack(spacing: 12) {
+            ForEach(Self.bands, id: \.name) { band in
+                HStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 2).fill(band.color).frame(width: 8, height: 8)
+                    Text(band.name)
+                }
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
     }
 
     // MARK: - Cumulative chart (today / typical / predicted)
@@ -111,7 +168,7 @@ struct DashboardView: View {
             }
         }
         .chartYAxis { tokenAxis }
-        .frame(width: 380, height: 92)
+        .frame(width: 380, height: 84)
     }
 
     // MARK: - Shared axes

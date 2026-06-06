@@ -66,19 +66,19 @@ final class CodexProvider: UsageProvider {
             .sorted { $0.date < $1.date }
     }
 
-    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [Int]]) -> Void) {
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [TokenCounts]]) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             completion(Self.dayMinuteMatrix(now: now, lastDays: lastDays))
         }
     }
 
-    /// Tokens per local minute for each day, from per-event cumulative deltas.
-    private static func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [Int]] {
+    /// Per-minute token counts (by type) for each day, from per-event cumulative deltas.
+    private static func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [TokenCounts]] {
         let decoder = JSONDecoder()
-        var byDay: [String: [Int]] = [:]
+        var byDay: [String: [TokenCounts]] = [:]
 
         for file in rolloutFiles() {
-            var prevInput = 0, prevOutput = 0
+            var prevInput = 0, prevCached = 0, prevOutput = 0
             LineReader.forEachLine(of: file) { lineData in
                 guard let line = try? decoder.decode(CodexLine.self, from: lineData),
                       line.type == "event_msg",
@@ -88,12 +88,17 @@ final class CodexProvider: UsageProvider {
                       let dm = DayBucket.localDayMinute(from: timestamp)
                 else { return }
 
+                let cached = usage.cached_input_tokens ?? 0
                 let deltaInput = max(0, usage.input_tokens - prevInput)
+                let deltaCached = max(0, cached - prevCached)
                 let deltaOutput = max(0, usage.output_tokens - prevOutput)
                 prevInput = usage.input_tokens
+                prevCached = cached
                 prevOutput = usage.output_tokens
 
-                byDay[dm.day, default: Array(repeating: 0, count: 1440)][dm.minute] += deltaInput + deltaOutput
+                byDay[dm.day, default: Array(repeating: TokenCounts(), count: 1440)][dm.minute]
+                    .add(input: max(0, deltaInput - deltaCached), output: deltaOutput,
+                         cacheCreation: 0, cacheRead: deltaCached)
             }
         }
         return DayBucket.recentDays(byDay, now: now, count: lastDays)

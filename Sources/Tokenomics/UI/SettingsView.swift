@@ -1,6 +1,18 @@
 import SwiftUI
 import ServiceManagement
 
+/// How the intraday rate chart is drawn. Persisted via @AppStorage.
+enum RateChartStyle: String, CaseIterable, Identifiable {
+    case line, stacked
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .line: return "Line"
+        case .stacked: return "Stacked by type"
+        }
+    }
+}
+
 /// Backs the "Launch at Login" toggle via SMAppService (macOS 13+). Registering
 /// adds the app to System Settings → General → Login Items, where the user can
 /// also turn it off. Used only from the main thread (AppDelegate / SwiftUI).
@@ -27,6 +39,7 @@ final class LoginItemModel: ObservableObject {
 
 struct SettingsView: View {
     @ObservedObject var login: LoginItemModel
+    @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -41,10 +54,21 @@ struct SettingsView: View {
                     .controlSize(.small)
             }
 
+            row("Rate chart",
+                subtitle: "How the intraday usage chart is drawn.") {
+                Picker("", selection: $rateStyle) {
+                    ForEach(RateChartStyle.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .fixedSize()
+            }
+
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 360, height: 160, alignment: .topLeading)
+        .frame(width: 360, height: 210, alignment: .topLeading)
         .onAppear { login.refresh() }
     }
 

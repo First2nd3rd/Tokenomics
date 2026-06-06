@@ -32,10 +32,10 @@ final class CombinedProvider: UsageProvider {
         }
     }
 
-    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [Int]]) -> Void) {
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [TokenCounts]]) -> Void) {
         let group = DispatchGroup()
         let lock = NSLock()
-        var merged: [String: [Int]] = [:]
+        var merged: [String: [TokenCounts]] = [:]
 
         for provider in providers {
             group.enter()
@@ -43,7 +43,7 @@ final class CombinedProvider: UsageProvider {
                 lock.lock()
                 for (day, minutes) in matrix {
                     if var existing = merged[day] {
-                        for i in 0..<min(existing.count, minutes.count) { existing[i] += minutes[i] }
+                        for i in 0..<min(existing.count, minutes.count) { existing[i].add(minutes[i]) }
                         merged[day] = existing
                     } else {
                         merged[day] = minutes

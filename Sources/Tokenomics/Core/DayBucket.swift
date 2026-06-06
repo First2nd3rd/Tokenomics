@@ -46,8 +46,8 @@ enum DayBucket {
         isoFractional.date(from: timestamp) ?? isoPlain.date(from: timestamp)
     }
 
-    /// Keep today plus the `count` most recent prior days from a day→minute matrix.
-    static func recentDays(_ matrix: [String: [Int]], now: Date, count: Int) -> [String: [Int]] {
+    /// Keep today plus the `count` most recent prior days from a day-keyed matrix.
+    static func recentDays<T>(_ matrix: [String: [T]], now: Date, count: Int) -> [String: [T]] {
         let today = dayKey(now)
         let keep = matrix.keys.filter { $0 <= today }.sorted().suffix(count + 1)
         return Dictionary(uniqueKeysWithValues: keep.map { ($0, matrix[$0]!) })

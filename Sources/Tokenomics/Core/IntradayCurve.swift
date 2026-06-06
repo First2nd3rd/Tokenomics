@@ -23,12 +23,12 @@ enum IntradayCurve {
         let projectedTotal: Int?
     }
 
-    static func build(matrix: [String: [Int]], now: Date, calendar: Calendar = .current) -> Series {
+    static func build(matrix: [String: [TokenCounts]], now: Date, calendar: Calendar = .current) -> Series {
         let todayKey = DayBucket.dayKey(now, calendar: calendar)
         let comps = calendar.dateComponents([.hour, .minute], from: now)
         let nowMinute = min(1439, (comps.hour ?? 0) * 60 + (comps.minute ?? 0))
 
-        let todayCum = prefixSum(matrix[todayKey] ?? Array(repeating: 0, count: 1440))
+        let todayCum = prefixSum(matrix[todayKey] ?? Array(repeating: TokenCounts(), count: 1440))
 
         // Typical: average absolute cumulative + average normalized shape over prior days.
         var typicalAbs = [Double](repeating: 0, count: 1440)
@@ -84,10 +84,10 @@ enum IntradayCurve {
                       projectedTotal: projectedTotal.map(Int.init))
     }
 
-    private static func prefixSum(_ values: [Int]) -> [Int] {
-        var out = values
+    private static func prefixSum(_ values: [TokenCounts]) -> [Int] {
+        var out = [Int](repeating: 0, count: values.count)
         var running = 0
-        for i in out.indices { running += values[i]; out[i] = running }
+        for i in values.indices { running += values[i].total; out[i] = running }
         return out
     }
 }
