@@ -11,7 +11,8 @@ import Foundation
 ///   - dedups by `message.id:requestId` (null key => never deduped, always counted)
 ///   - buckets each line by its `timestamp` converted to the LOCAL calendar day
 ///
-/// Cost is intentionally NOT computed yet (totalCost = 0); tokens only for now.
+/// Cost is computed per message from the bundled `Pricing` table (same formula
+/// and LiteLLM-sourced prices as ccusage) and summed per day.
 final class ClaudeNativeProvider: UsageProvider {
     let id = "claude-native"
 
@@ -50,13 +51,18 @@ final class ClaudeNativeProvider: UsageProvider {
                       let day = localDay(from: timestamp)
                 else { continue }
 
+                // ccusage tags "fast" (priority-tier) turns by appending "-fast" to
+                // the model name, which carries the 6x price; mirror that here.
+                var model = line.message?.model
+                if usage.speed == "fast", let base = model { model = base + "-fast" }
+
                 let entry = Entry(
                     day: day,
                     input: input,
                     output: output,
                     cacheCreation: usage.cache_creation_input_tokens ?? 0,
                     cacheRead: usage.cache_read_input_tokens ?? 0,
-                    model: line.message?.model
+                    model: model
                 )
 
                 if let id = line.message?.id, let requestId = line.requestId {
@@ -169,6 +175,7 @@ private struct DayAccumulator {
     var output = 0
     var cacheCreation = 0
     var cacheRead = 0
+    var cost = 0.0
     var models = Set<String>()
 
     mutating func add(_ entry: Entry) {
@@ -177,6 +184,11 @@ private struct DayAccumulator {
         cacheCreation += entry.cacheCreation
         cacheRead += entry.cacheRead
         if let model = entry.model, model != "<synthetic>" { models.insert(model) }
+        // Cost is per-message (each model has its own prices), summed per day.
+        if let pricing = PricingStore.shared.pricing(for: entry.model) {
+            cost += pricing.cost(input: entry.input, output: entry.output,
+                                 cacheCreation: entry.cacheCreation, cacheRead: entry.cacheRead)
+        }
     }
 
     func makeDailyUsage(date: String) -> DailyUsage {
@@ -187,7 +199,7 @@ private struct DayAccumulator {
             cacheCreationTokens: cacheCreation,
             cacheReadTokens: cacheRead,
             totalTokens: input + output + cacheCreation + cacheRead,
-            totalCost: 0,                       // cost not computed yet
+            totalCost: cost,
             models: models.sorted()
         )
     }
@@ -211,5 +223,6 @@ private struct Line: Decodable {
         let output_tokens: Int?
         let cache_creation_input_tokens: Int?
         let cache_read_input_tokens: Int?
+        let speed: String?          // "fast" => priority-tier pricing
     }
 }

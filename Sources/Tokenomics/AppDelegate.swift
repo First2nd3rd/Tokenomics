@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func refresh() {
+        PricingStore.shared.refreshIfStale()   // background, daily at most
         store.refresh { [weak self] result in
             guard let self else { return }
             switch result {
