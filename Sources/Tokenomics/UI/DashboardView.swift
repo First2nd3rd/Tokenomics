@@ -9,9 +9,11 @@ struct DashboardView: View {
     var onSettings: () -> Void
     var onQuit: () -> Void
 
-    /// The rate chart's x-axis grows with the day (a little past "now"), min 3h, 24h cap.
+    /// End the x-axis at "now" (the last bucket's position), so there's no empty
+    /// tail and the right edge advances each refresh.
     private var rateUpperBound: Double {
-        min(24, max(3, model.nowHour + 0.3))
+        guard let now = model.rate5min.last?.hour else { return 1 }
+        return min(24, max(0.5, now + 0.04))
     }
 
     var body: some View {
@@ -61,10 +63,14 @@ struct DashboardView: View {
                 .interpolationMethod(.monotone)
                 .foregroundStyle(
                     .linearGradient(
-                        colors: [Color.accentColor.opacity(0.55), Color.accentColor.opacity(0.04)],
+                        colors: [Color.accentColor.opacity(0.45), Color.accentColor.opacity(0.10)],
                         startPoint: .top, endPoint: .bottom
                     )
                 )
+            LineMark(x: .value("Hour", point.hour), y: .value("Tokens", point.tokens))
+                .interpolationMethod(.monotone)
+                .foregroundStyle(Color.accentColor)
+                .lineStyle(StrokeStyle(lineWidth: 1.5))
         }
         .chartXScale(domain: 0...rateUpperBound)
         .chartXAxis { hourAxis }

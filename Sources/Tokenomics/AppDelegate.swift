@@ -52,8 +52,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // One timestamp for the whole refresh so the title, projection, and charts
         // all describe the same instant.
         let now = Date()
-        let comps = Calendar.current.dateComponents([.hour, .minute], from: now)
-        model.nowHour = Double((comps.hour ?? 0) * 60 + (comps.minute ?? 0)) / 60.0
 
         store.refresh { [weak self] result in
             guard let self else { return }
@@ -72,7 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         store.refreshMatrix(now: now, lastDays: Self.matrixDays) { [weak self] matrix in
             guard let self else { return }
-            self.model.updateRate(fromMinuteTokens: matrix[DayBucket.dayKey(now)] ?? Array(repeating: 0, count: 1440))
+            let comps = Calendar.current.dateComponents([.hour, .minute], from: now)
+            let nowMinute = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+            let todayMinutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: 0, count: 1440)
+            self.model.updateRate(fromMinuteTokens: todayMinutes, nowMinute: nowMinute)
 
             let series = IntradayCurve.build(matrix: matrix, now: now)
             self.model.cumToday = series.today

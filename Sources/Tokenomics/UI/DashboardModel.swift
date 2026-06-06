@@ -14,7 +14,6 @@ final class DashboardModel: ObservableObject {
     @Published var headline: String = "Loading…"
     @Published var subtitle: String = ""
     @Published var rate5min: [RatePoint] = []
-    @Published var nowHour: Double = 24      // local hour-of-day, drives the x-axis extent
 
     // Cumulative chart lines.
     @Published var cumToday: [CumPoint] = []
@@ -23,16 +22,20 @@ final class DashboardModel: ObservableObject {
 
     private static let bucketMinutes = 5
 
-    /// Collapse 1440 per-minute token counts into 5-minute buckets for the chart.
-    func updateRate(fromMinuteTokens minutes: [Int]) {
+    /// Collapse per-minute token counts into 5-minute buckets up to `nowMinute`.
+    /// Earlier buckets sit at their start minute; the in-progress final bucket is
+    /// plotted at `now` (its value is the partial sum since the last 5-min mark),
+    /// so the chart's right edge tracks the current time and advances each refresh.
+    func updateRate(fromMinuteTokens minutes: [Int], nowMinute: Int) {
         guard minutes.count == 1440 else { rate5min = []; return }
+        let cap = min(max(nowMinute, 0), 1439)
         var points: [RatePoint] = []
-        points.reserveCapacity(1440 / Self.bucketMinutes)
         var start = 0
-        while start < 1440 {
+        while start <= cap {
             let end = min(start + Self.bucketMinutes, 1440)
-            let sum = minutes[start..<end].reduce(0, +)
-            points.append(RatePoint(id: start, hour: Double(start) / 60.0, tokens: sum))
+            let sum = minutes[start..<end].reduce(0, +)   // future minutes are 0 ⇒ partial bucket
+            let atMinute = (start + Self.bucketMinutes > cap) ? cap : start
+            points.append(RatePoint(id: start, hour: Double(atMinute) / 60.0, tokens: sum))
             start += Self.bucketMinutes
         }
         rate5min = points
