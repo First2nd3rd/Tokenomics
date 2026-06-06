@@ -77,7 +77,7 @@ final class ClaudeNativeProvider: UsageProvider {
                   let input = usage.input_tokens,
                   let output = usage.output_tokens,
                   let timestamp = line.timestamp,
-                  let day = localDay(from: timestamp)
+                  let day = DayBucket.localDay(from: timestamp)
             else { continue }
 
             // ccusage tags "fast" (priority-tier) turns by appending "-fast" to the
@@ -172,34 +172,6 @@ final class ClaudeNativeProvider: UsageProvider {
         return files
     }
 
-    // MARK: - Date helpers
-
-    private static let isoFractional: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-
-    private static let isoPlain: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
-
-    private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
-    /// UTC ISO-8601 timestamp -> local "yyyy-MM-dd" (matching ccusage's local bucketing).
-    static func localDay(from timestamp: String) -> String? {
-        guard let date = isoFractional.date(from: timestamp) ?? isoPlain.date(from: timestamp)
-        else { return nil }
-        return dayFormatter.string(from: date)
-    }
 }
 
 // MARK: - Per-day accumulation

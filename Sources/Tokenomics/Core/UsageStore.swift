@@ -17,7 +17,7 @@ struct UsageSnapshot {
 final class UsageStore {
     private let provider: UsageProvider
 
-    init(provider: UsageProvider = ClaudeNativeProvider()) {
+    init(provider: UsageProvider = CombinedProvider([ClaudeNativeProvider(), CodexProvider()])) {
         self.provider = provider
     }
 

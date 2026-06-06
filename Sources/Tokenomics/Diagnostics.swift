@@ -20,9 +20,10 @@ enum Bench {
 }
 
 enum DumpDaily {
-    static func run() {
+    /// `--dump-daily` dumps Claude; `--dump-codex` dumps Codex.
+    static func run(provider: UsageProvider = ClaudeNativeProvider()) {
         let semaphore = DispatchSemaphore(value: 0)
-        ClaudeNativeProvider().fetchDaily { result in
+        provider.fetchDaily { result in
             switch result {
             case .success(let days):
                 var out = ""

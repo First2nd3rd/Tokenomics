@@ -3,7 +3,11 @@ import AppKit
 // Diagnostic mode: dump the native reader's daily token totals and exit, for
 // verifying it against ccusage. Runs before any GUI setup.
 if CommandLine.arguments.contains("--dump-daily") {
-    DumpDaily.run()
+    DumpDaily.run(provider: ClaudeNativeProvider())
+    exit(0)
+}
+if CommandLine.arguments.contains("--dump-codex") {
+    DumpDaily.run(provider: CodexProvider())
     exit(0)
 }
 if CommandLine.arguments.contains("--bench") {

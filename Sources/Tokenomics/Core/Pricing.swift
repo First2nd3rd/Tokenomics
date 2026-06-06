@@ -43,6 +43,8 @@ enum Pricing {
         "claude-sonnet-4-6":         ModelPricing(input: 0.000003, output: 0.000015, cacheCreation: 0.00000375, cacheRead: 0.0000003),
         // Haiku 4.5 — $1 / $5 / $1.25 / $0.10
         "claude-haiku-4-5-20251001": ModelPricing(input: 0.000001, output: 0.000005, cacheCreation: 0.00000125, cacheRead: 0.0000001),
+        // Codex GPT-5.5 — $5 / $30 / (no cache-creation) / $0.50 cache-read
+        "gpt-5.5":                   ModelPricing(input: 0.000005, output: 0.000030, cacheCreation: 0, cacheRead: 0.0000005),
     ]
 
     /// Resolve pricing for a model id against `table`:
