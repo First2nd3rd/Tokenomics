@@ -24,11 +24,18 @@ protocol UsageProvider {
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void)
     /// Today's tokens per local minute (0…1439), for the intraday rate chart.
     func fetchTodayByMinute(now: Date, completion: @escaping ([Int]) -> Void)
+    /// Tokens per local minute for today + the `lastDays` prior days (day → [1440]),
+    /// for the cumulative curve and its typical/prediction overlays.
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [Int]]) -> Void)
 }
 
 extension UsageProvider {
     /// Providers without intraday support contribute an empty (all-zero) series.
     func fetchTodayByMinute(now: Date, completion: @escaping ([Int]) -> Void) {
         completion(Array(repeating: 0, count: 1440))
+    }
+
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [Int]]) -> Void) {
+        completion([:])
     }
 }

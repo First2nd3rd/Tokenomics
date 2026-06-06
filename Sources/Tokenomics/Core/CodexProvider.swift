@@ -106,6 +106,40 @@ final class CodexProvider: UsageProvider {
             .sorted { $0.date < $1.date }
     }
 
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [Int]]) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            completion(Self.dayMinuteMatrix(now: now, lastDays: lastDays))
+        }
+    }
+
+    /// Tokens per local minute for each day, from per-event cumulative deltas.
+    static func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [Int]] {
+        let decoder = JSONDecoder()
+        var byDay: [String: [Int]] = [:]
+
+        for file in rolloutFiles() {
+            guard let data = try? Data(contentsOf: file) else { continue }
+            var prevInput = 0, prevOutput = 0
+            for lineSlice in data.split(separator: 0x0A) where !lineSlice.isEmpty {
+                guard let line = try? decoder.decode(CodexLine.self, from: Data(lineSlice)),
+                      line.type == "event_msg",
+                      line.payload?.type == "token_count",
+                      let usage = line.payload?.info?.total_token_usage,
+                      let timestamp = line.timestamp,
+                      let dm = DayBucket.localDayMinute(from: timestamp)
+                else { continue }
+
+                let deltaInput = max(0, usage.input_tokens - prevInput)
+                let deltaOutput = max(0, usage.output_tokens - prevOutput)
+                prevInput = usage.input_tokens
+                prevOutput = usage.output_tokens
+
+                byDay[dm.day, default: Array(repeating: 0, count: 1440)][dm.minute] += deltaInput + deltaOutput
+            }
+        }
+        return DayBucket.recentDays(byDay, now: now, count: lastDays)
+    }
+
     /// All `rollout-*.jsonl` under `~/.codex/sessions` (or `$CODEX_HOME`).
     static func rolloutFiles() -> [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser

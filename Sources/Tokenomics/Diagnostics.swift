@@ -43,6 +43,28 @@ enum DumpIntraday {
     }
 }
 
+/// Prints the cumulative-curve summary (today final, typical final, projected) to
+/// sanity-check the prediction. Invoked with `--dump-curve`.
+enum DumpCurve {
+    static func run() {
+        let provider = CombinedProvider([ClaudeNativeProvider(), CodexProvider()])
+        let semaphore = DispatchSemaphore(value: 0)
+        provider.fetchDayMinuteMatrix(now: Date(), lastDays: 14) { matrix in
+            let series = IntradayCurve.build(matrix: matrix, now: Date())
+            let todayFinal = series.today.last?.tokens ?? 0
+            let typicalFinal = series.typical.last?.tokens ?? 0
+            var out = ""
+            out += "prior days in matrix: \(matrix.keys.count - 1)\n"
+            out += "today cumulative (so far): \(todayFinal)\n"
+            out += "typical day (avg total):   \(typicalFinal)\n"
+            out += "projected end-of-day:      \(series.projectedTotal.map(String.init) ?? "n/a")\n"
+            FileHandle.standardOutput.write(Data(out.utf8))
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+}
+
 enum DumpDaily {
     /// `--dump-daily` dumps Claude; `--dump-codex` dumps Codex.
     static func run(provider: UsageProvider = ClaudeNativeProvider()) {

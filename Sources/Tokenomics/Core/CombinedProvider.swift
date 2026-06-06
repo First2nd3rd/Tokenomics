@@ -52,6 +52,31 @@ final class CombinedProvider: UsageProvider {
         }
     }
 
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [Int]]) -> Void) {
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var merged: [String: [Int]] = [:]
+
+        for provider in providers {
+            group.enter()
+            provider.fetchDayMinuteMatrix(now: now, lastDays: lastDays) { matrix in
+                lock.lock()
+                for (day, minutes) in matrix {
+                    if var existing = merged[day] {
+                        for i in 0..<min(existing.count, minutes.count) { existing[i] += minutes[i] }
+                        merged[day] = existing
+                    } else {
+                        merged[day] = minutes
+                    }
+                }
+                lock.unlock()
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .global(qos: .utility)) { completion(merged) }
+    }
+
     static func merge(_ lists: [[DailyUsage]]) -> [DailyUsage] {
         var byDay: [String: DailyUsage] = [:]
         for day in lists.flatMap({ $0 }) {
