@@ -8,6 +8,9 @@
 .swiftpm/
 *.xcodeproj/xcuserdata/
 
+# Packaged app bundle (build artifact)
+dist/
+
 # Xcode
 xcuserdata/
 DerivedData/
