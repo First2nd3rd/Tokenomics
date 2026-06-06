@@ -1,7 +1,7 @@
 import AppKit
 
-// Diagnostic mode: dump the native reader's daily token totals and exit, for
-// verifying it against ccusage. Runs before any GUI setup.
+// Diagnostic flags (used to verify the readers against ccusage and to profile
+// memory) each run and exit before any GUI setup.
 if CommandLine.arguments.contains("--dump-daily") {
     DumpDaily.run(provider: ClaudeNativeProvider())
     exit(0)

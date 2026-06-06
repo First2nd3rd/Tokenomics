@@ -1,60 +1,41 @@
 import Foundation
 
-/// Turns a raw `UsageSnapshot` into the numbers the menu bar (and, later, the
-/// widget) actually display: today's running total, a run-rate projection for
-/// end-of-day, and recent-average anchors for comparison.
-///
-/// Pure and deterministic given `(snapshot, now)`, so it is trivially testable
-/// and reusable across every presentation surface.
+/// Turns a raw `UsageSnapshot` into the figures the menu bar shows: whether today
+/// has data, the headline day, a run-rate end-of-day projection, and a
+/// recent-average anchor. Pure and deterministic given `(snapshot, now)`.
 struct Dashboard {
     /// Below this fraction of the day elapsed, a run-rate projection is too
-    /// volatile to be meaningful (e.g. one burst right after midnight would
-    /// extrapolate to an absurd daily total). ~01:55 local.
+    /// volatile to be meaningful (a burst right after midnight would extrapolate
+    /// to an absurd daily total). ~01:55 local.
     private static let minProjectableFraction = 0.08
 
     /// How many prior days feed the "recent average" anchor.
     private static let averageWindow = 7
 
-    let today: DailyUsage?          // entry whose date == local today, if any
     let isToday: Bool               // whether `headline` is actually today
     let headline: DailyUsage?       // today ?? most recent day (the big number)
-    let previousDay: DailyUsage?    // most recent day before `headline`
-
-    let dayFraction: Double         // 0...1 of the local day elapsed
     let projectedTokens: Int?       // run-rate end-of-day estimate
     let projectedCost: Double?
-
     let avgTokens: Int?             // mean over up to `averageWindow` prior days
-    let avgCost: Double?
 
     static func make(from snapshot: UsageSnapshot,
                      now: Date,
                      calendar: Calendar = .current) -> Dashboard {
         let days = snapshot.days    // sorted ascending by date
-        let todayKey = dayKey(now, calendar: calendar)
+        let todayKey = DayBucket.dayKey(now, calendar: calendar)
 
         let todayEntry = days.last(where: { $0.date == todayKey })
         let headline = todayEntry ?? days.last
         let isToday = todayEntry != nil
-
-        // The day immediately before the headline entry (gap-tolerant: takes the
-        // previous entry in the data, which may skip days with no usage).
-        var previousDay: DailyUsage?
-        if let h = headline,
-           let idx = days.firstIndex(where: { $0.date == h.date }), idx > 0 {
-            previousDay = days[idx - 1]
-        }
 
         // Recent average excludes the headline day itself.
         let prior = days.filter { $0.date != headline?.date }
         let window = Array(prior.suffix(averageWindow))
         let avgTokens = window.isEmpty
             ? nil : window.reduce(0) { $0 + $1.totalTokens } / window.count
-        let avgCost = window.isEmpty
-            ? nil : window.reduce(0.0) { $0 + $1.totalCost } / Double(window.count)
 
-        // Run-rate projection — only meaningful when the headline is actually
-        // today and enough of the day has elapsed.
+        // Run-rate projection — only when the headline is actually today and enough
+        // of the day has elapsed.
         let fraction = fractionOfDayElapsed(now, calendar: calendar)
         var projTokens: Int?
         var projCost: Double?
@@ -66,24 +47,12 @@ struct Dashboard {
         }
 
         return Dashboard(
-            today: todayEntry,
             isToday: isToday,
             headline: headline,
-            previousDay: previousDay,
-            dayFraction: fraction,
             projectedTokens: projTokens,
             projectedCost: projCost,
-            avgTokens: avgTokens,
-            avgCost: avgCost
+            avgTokens: avgTokens
         )
-    }
-
-    // MARK: - Date helpers
-
-    /// Local calendar-day key like "2026-06-03", matching ccusage's `period`.
-    static func dayKey(_ date: Date, calendar: Calendar) -> String {
-        let c = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
     /// Fraction (0...1) of the local day elapsed at `now`.

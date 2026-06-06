@@ -6,6 +6,9 @@ import SwiftUI
 /// Presentation only — all numbers come from `Dashboard` / the provider layer.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let refreshInterval: TimeInterval = 60
+    /// Prior days fetched for the cumulative chart's typical-day curve — wider than
+    /// Dashboard's 7-day average window to give IntradayCurve enough history.
+    private static let matrixDays = 14
 
     private var statusItem: NSStatusItem!
     private let store = UsageStore()
@@ -43,14 +46,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func refresh() {
         PricingStore.shared.refreshIfStale()   // background, daily at most
 
-        let comps = Calendar.current.dateComponents([.hour, .minute], from: Date())
+        // One timestamp for the whole refresh so the title, projection, and charts
+        // all describe the same instant.
+        let now = Date()
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: now)
         model.nowHour = Double((comps.hour ?? 0) * 60 + (comps.minute ?? 0)) / 60.0
 
         store.refresh { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let snapshot):
-                let dashboard = Dashboard.make(from: snapshot, now: Date())
+                let dashboard = Dashboard.make(from: snapshot, now: now)
                 self.statusItem.button?.title = "🪙 " + Format.tokensShort(dashboard.headline?.totalTokens ?? 0)
                 self.model.headline = Self.headlineText(dashboard)
                 self.model.subtitle = Self.subtitleText(dashboard)
@@ -61,11 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        store.refreshMatrix(lastDays: 14) { [weak self] matrix in
+        store.refreshMatrix(now: now, lastDays: Self.matrixDays) { [weak self] matrix in
             guard let self else { return }
-            let now = Date()
-            let todayKey = Dashboard.dayKey(now, calendar: .current)
-            self.model.updateRate(fromMinuteTokens: matrix[todayKey] ?? Array(repeating: 0, count: 1440))
+            self.model.updateRate(fromMinuteTokens: matrix[DayBucket.dayKey(now)] ?? Array(repeating: 0, count: 1440))
 
             let series = IntradayCurve.build(matrix: matrix, now: now)
             self.model.cumToday = series.today

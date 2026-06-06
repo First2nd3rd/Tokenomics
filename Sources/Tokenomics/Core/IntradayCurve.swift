@@ -24,7 +24,7 @@ enum IntradayCurve {
     }
 
     static func build(matrix: [String: [Int]], now: Date, calendar: Calendar = .current) -> Series {
-        let todayKey = Dashboard.dayKey(now, calendar: calendar)
+        let todayKey = DayBucket.dayKey(now, calendar: calendar)
         let comps = calendar.dateComponents([.hour, .minute], from: now)
         let nowMinute = min(1439, (comps.hour ?? 0) * 60 + (comps.minute ?? 0))
 

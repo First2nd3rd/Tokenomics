@@ -28,6 +28,12 @@ enum DayBucket {
         return dayFormatter.string(from: date)
     }
 
+    /// Local calendar-day key like "2026-06-03", matching ccusage's `period`.
+    static func dayKey(_ date: Date, calendar: Calendar = .current) -> String {
+        let c = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+
     /// Local day key plus minute-of-day (0…1439) for intraday bucketing.
     static func localDayMinute(from timestamp: String) -> (day: String, minute: Int)? {
         guard let date = parse(timestamp) else { return nil }
@@ -42,7 +48,7 @@ enum DayBucket {
 
     /// Keep today plus the `count` most recent prior days from a day→minute matrix.
     static func recentDays(_ matrix: [String: [Int]], now: Date, count: Int) -> [String: [Int]] {
-        let today = Dashboard.dayKey(now, calendar: .current)
+        let today = dayKey(now)
         let keep = matrix.keys.filter { $0 <= today }.sorted().suffix(count + 1)
         return Dictionary(uniqueKeysWithValues: keep.map { ($0, matrix[$0]!) })
     }

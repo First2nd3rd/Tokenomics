@@ -21,58 +21,19 @@ final class CodexProvider: UsageProvider {
         }
     }
 
-    func fetchTodayByMinute(now: Date, completion: @escaping ([Int]) -> Void) {
-        DispatchQueue.global(qos: .utility).async {
-            completion(Self.todayByMinute(now: now))
-        }
-    }
-
-    /// Today's tokens per local minute, from per-event cumulative deltas.
-    static func todayByMinute(now: Date) -> [Int] {
-        let today = Dashboard.dayKey(now, calendar: .current)
-        let decoder = JSONDecoder()
-        var buckets = Array(repeating: 0, count: 1440)
-
-        for file in rolloutFiles() {
-            var prevInput = 0, prevOutput = 0
-            LineReader.forEachLine(of: file) { lineData in
-                guard let line = try? decoder.decode(CodexLine.self, from: lineData),
-                      line.type == "event_msg",
-                      line.payload?.type == "token_count",
-                      let usage = line.payload?.info?.total_token_usage,
-                      let timestamp = line.timestamp,
-                      let dm = DayBucket.localDayMinute(from: timestamp)
-                else { return }
-
-                let deltaInput = max(0, usage.input_tokens - prevInput)
-                let deltaOutput = max(0, usage.output_tokens - prevOutput)
-                prevInput = usage.input_tokens
-                prevOutput = usage.output_tokens
-
-                if dm.day == today {
-                    buckets[dm.minute] += deltaInput + deltaOutput   // delta of total tokens
-                }
-            }
-        }
-        return buckets
-    }
-
-    static func readDaily() -> [DailyUsage] {
+    private static func readDaily() -> [DailyUsage] {
         let decoder = JSONDecoder()
         var byDay: [String: CodexDay] = [:]
 
         for file in rolloutFiles() {
-            guard let data = try? Data(contentsOf: file) else { continue }
-
             var model: String?
             var prevInput = 0, prevCached = 0, prevOutput = 0
-
-            for lineSlice in data.split(separator: 0x0A) where !lineSlice.isEmpty {
-                guard let line = try? decoder.decode(CodexLine.self, from: Data(lineSlice)) else { continue }
+            LineReader.forEachLine(of: file) { lineData in
+                guard let line = try? decoder.decode(CodexLine.self, from: lineData) else { return }
 
                 if line.type == "turn_context", let m = line.payload?.model {
                     model = m
-                    continue
+                    return
                 }
 
                 guard line.type == "event_msg",
@@ -80,7 +41,7 @@ final class CodexProvider: UsageProvider {
                       let usage = line.payload?.info?.total_token_usage,
                       let timestamp = line.timestamp,
                       let day = DayBucket.localDay(from: timestamp)
-                else { continue }
+                else { return }
 
                 let cached = usage.cached_input_tokens ?? 0
                 // Deltas vs the previous cumulative (clamped ≥ 0 against resets).
@@ -112,7 +73,7 @@ final class CodexProvider: UsageProvider {
     }
 
     /// Tokens per local minute for each day, from per-event cumulative deltas.
-    static func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [Int]] {
+    private static func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [Int]] {
         let decoder = JSONDecoder()
         var byDay: [String: [Int]] = [:]
 
@@ -139,7 +100,7 @@ final class CodexProvider: UsageProvider {
     }
 
     /// All `rollout-*.jsonl` under `~/.codex/sessions` (or `$CODEX_HOME`).
-    static func rolloutFiles() -> [URL] {
+    private static func rolloutFiles() -> [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let base = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? home.appendingPathComponent(".codex")

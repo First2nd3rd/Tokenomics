@@ -11,30 +11,20 @@ struct DailyUsage {
     let totalTokens: Int
     let totalCost: Double        // USD, API-equivalent pricing
     let models: [String]
-
-    /// Tokens that represent "real work" — excludes cache traffic, which can
-    /// dwarf the headline number. Useful for an alternate display later.
-    var workTokens: Int { inputTokens + outputTokens }
 }
 
-/// A source of usage data. Callback-based to keep the prototype free of Swift-6
-/// concurrency ceremony.
+/// A source of usage data. Callback-based rather than async/await to avoid
+/// Swift-6 actor-isolation ceremony until the project adopts strict concurrency.
 protocol UsageProvider {
     var id: String { get }
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void)
-    /// Today's tokens per local minute (0…1439), for the intraday rate chart.
-    func fetchTodayByMinute(now: Date, completion: @escaping ([Int]) -> Void)
     /// Tokens per local minute for today + the `lastDays` prior days (day → [1440]),
-    /// for the cumulative curve and its typical/prediction overlays.
+    /// for the intraday rate chart and the cumulative curve.
     func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [Int]]) -> Void)
 }
 
 extension UsageProvider {
-    /// Providers without intraday support contribute an empty (all-zero) series.
-    func fetchTodayByMinute(now: Date, completion: @escaping ([Int]) -> Void) {
-        completion(Array(repeating: 0, count: 1440))
-    }
-
+    /// Providers without intraday support contribute an empty matrix.
     func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [Int]]) -> Void) {
         completion([:])
     }

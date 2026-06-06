@@ -17,13 +17,6 @@ enum Format {
         }
     }
 
-    /// Grouped full count for the dropdown: 72,889,694.
-    static func grouped(_ n: Int) -> String {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        return f.string(from: NSNumber(value: n)) ?? "\(n)"
-    }
-
     static func cost(_ c: Double) -> String {
         String(format: "$%.2f", c)
     }

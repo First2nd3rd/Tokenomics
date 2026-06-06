@@ -29,12 +29,6 @@ final class ClaudeNativeProvider: UsageProvider {
         }
     }
 
-    func fetchTodayByMinute(now: Date, completion: @escaping ([Int]) -> Void) {
-        queue.async {
-            completion(self.todayByMinute(now: now))
-        }
-    }
-
     func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [Int]]) -> Void) {
         queue.async {
             completion(self.dayMinuteMatrix(now: now, lastDays: lastDays))
@@ -89,16 +83,6 @@ final class ClaudeNativeProvider: UsageProvider {
         return byDay
             .map { $0.value.makeDailyUsage(date: $0.key) }
             .sorted { $0.date < $1.date }
-    }
-
-    /// Today's tokens per local minute (0…1439), deduped.
-    private func todayByMinute(now: Date) -> [Int] {
-        let today = Dashboard.dayKey(now, calendar: .current)
-        var buckets = Array(repeating: 0, count: 1440)
-        for entry in Self.dedupe(cachedRecords()) where entry.day == today {
-            buckets[entry.minute] += entry.tokens
-        }
-        return buckets
     }
 
     /// Parse one JSONL file into usage records (cross-file dedup happens later).

@@ -37,13 +37,18 @@ final class PricingStore {
     /// Fetch fresh prices in the background when the cache is missing or older than
     /// the TTL. No-op while a fetch is already in flight or the cache is fresh.
     func refreshIfStale() {
+        // Check the "already fetching" flag and the cache age, and claim the fetch,
+        // all in one critical section so two callers can't both start a fetch.
         lock.lock()
-        let alreadyFetching = isFetching
+        if isFetching {
+            lock.unlock(); return
+        }
+        if let age = Self.cacheAge(), age < Self.cacheTTL {
+            lock.unlock(); return
+        }
+        isFetching = true
         lock.unlock()
-        guard !alreadyFetching else { return }
-        if let age = Self.cacheAge(), age < Self.cacheTTL { return }
 
-        lock.lock(); isFetching = true; lock.unlock()
         URLSession.shared.dataTask(with: Self.sourceURL) { [weak self] data, _, _ in
             guard let self else { return }
             defer {
