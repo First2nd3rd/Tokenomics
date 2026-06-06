@@ -24,8 +24,19 @@ enum DayBucket {
     }()
 
     static func localDay(from timestamp: String) -> String? {
-        guard let date = isoFractional.date(from: timestamp) ?? isoPlain.date(from: timestamp)
-        else { return nil }
+        guard let date = parse(timestamp) else { return nil }
         return dayFormatter.string(from: date)
+    }
+
+    /// Local day key plus minute-of-day (0…1439) for intraday bucketing.
+    static func localDayMinute(from timestamp: String) -> (day: String, minute: Int)? {
+        guard let date = parse(timestamp) else { return nil }
+        let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+        let minute = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+        return (dayFormatter.string(from: date), minute)
+    }
+
+    private static func parse(_ timestamp: String) -> Date? {
+        isoFractional.date(from: timestamp) ?? isoPlain.date(from: timestamp)
     }
 }

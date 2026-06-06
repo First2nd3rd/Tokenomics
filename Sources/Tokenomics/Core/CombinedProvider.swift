@@ -32,6 +32,26 @@ final class CombinedProvider: UsageProvider {
         }
     }
 
+    func fetchTodayByMinute(now: Date, completion: @escaping ([Int]) -> Void) {
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var summed = Array(repeating: 0, count: 1440)
+
+        for provider in providers {
+            group.enter()
+            provider.fetchTodayByMinute(now: now) { minutes in
+                lock.lock()
+                for i in 0..<min(summed.count, minutes.count) { summed[i] += minutes[i] }
+                lock.unlock()
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .global(qos: .utility)) {
+            completion(summed)
+        }
+    }
+
     static func merge(_ lists: [[DailyUsage]]) -> [DailyUsage] {
         var byDay: [String: DailyUsage] = [:]
         for day in lists.flatMap({ $0 }) {

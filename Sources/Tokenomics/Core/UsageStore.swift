@@ -29,4 +29,11 @@ final class UsageStore {
             DispatchQueue.main.async { completion(mapped) }
         }
     }
+
+    /// Today's tokens per local minute (0…1439), delivered on the main queue.
+    func refreshIntraday(now: Date = Date(), completion: @escaping ([Int]) -> Void) {
+        provider.fetchTodayByMinute(now: now) { minutes in
+            DispatchQueue.main.async { completion(minutes) }
+        }
+    }
 }

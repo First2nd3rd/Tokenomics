@@ -29,18 +29,23 @@ final class ClaudeNativeProvider: UsageProvider {
         }
     }
 
+    func fetchTodayByMinute(now: Date, completion: @escaping ([Int]) -> Void) {
+        queue.async {
+            completion(self.todayByMinute(now: now))
+        }
+    }
+
     // MARK: - Reading
 
-    /// Aggregates per-day usage, re-parsing only files whose mtime/size changed
-    /// since the last call; unchanged files reuse their cached records. This keeps
-    /// the recurring 60s refresh cheap once the first full scan is warm.
-    private func readDaily() -> [DailyUsage] {
+    /// Refresh the mtime cache and return all parsed records (pre-dedup). Re-parses
+    /// only files whose mtime/size changed; unchanged files reuse cached records, so
+    /// the recurring refresh stays cheap once the first full scan is warm.
+    private func cachedRecords() -> [Record] {
         let files = Self.claudeProjectRoots().flatMap { Self.jsonlFiles(under: $0) }
         let fm = FileManager.default
 
         var nextCache: [String: CachedFile] = [:]
         var records: [Record] = []
-
         for file in files {
             let path = file.path
             let attrs = try? fm.attributesOfItem(atPath: path)
@@ -57,8 +62,28 @@ final class ClaudeNativeProvider: UsageProvider {
             records.append(contentsOf: cached.records)
         }
         fileCache = nextCache   // entries for deleted files fall away
+        return records
+    }
 
-        return Self.aggregate(records)
+    /// Per-day totals (deduped).
+    private func readDaily() -> [DailyUsage] {
+        var byDay: [String: DayAccumulator] = [:]
+        for entry in Self.dedupe(cachedRecords()) {
+            byDay[entry.day, default: DayAccumulator()].add(entry)
+        }
+        return byDay
+            .map { $0.value.makeDailyUsage(date: $0.key) }
+            .sorted { $0.date < $1.date }
+    }
+
+    /// Today's tokens per local minute (0…1439), deduped.
+    private func todayByMinute(now: Date) -> [Int] {
+        let today = Dashboard.dayKey(now, calendar: .current)
+        var buckets = Array(repeating: 0, count: 1440)
+        for entry in Self.dedupe(cachedRecords()) where entry.day == today {
+            buckets[entry.minute] += entry.tokens
+        }
+        return buckets
     }
 
     /// Parse one JSONL file into usage records (cross-file dedup happens later).
@@ -77,7 +102,7 @@ final class ClaudeNativeProvider: UsageProvider {
                   let input = usage.input_tokens,
                   let output = usage.output_tokens,
                   let timestamp = line.timestamp,
-                  let day = DayBucket.localDay(from: timestamp)
+                  let dm = DayBucket.localDayMinute(from: timestamp)
             else { continue }
 
             // ccusage tags "fast" (priority-tier) turns by appending "-fast" to the
@@ -86,7 +111,8 @@ final class ClaudeNativeProvider: UsageProvider {
             if usage.speed == "fast", let base = model { model = base + "-fast" }
 
             let entry = Entry(
-                day: day,
+                day: dm.day,
+                minute: dm.minute,
                 input: input,
                 output: output,
                 cacheCreation: usage.cache_creation_input_tokens ?? 0,
@@ -103,11 +129,10 @@ final class ClaudeNativeProvider: UsageProvider {
         return records
     }
 
-    /// Cross-file dedup (keep the largest-output line per message) + per-day totals.
-    private static func aggregate(_ records: [Record]) -> [DailyUsage] {
-        // One assistant turn spans several JSONL lines sharing `message.id:requestId`
-        // with identical input/cache but a growing output_tokens; keep the largest.
-        // Lines missing either id can't be deduped (kept individually, like ccusage).
+    /// Cross-file dedup: one assistant turn spans several JSONL lines sharing
+    /// `message.id:requestId` with identical input/cache but a growing output; keep
+    /// the largest. Lines missing either id can't be deduped (kept individually).
+    private static func dedupe(_ records: [Record]) -> [Entry] {
         var best: [String: Entry] = [:]
         var keyless: [Entry] = []
         for record in records {
@@ -118,14 +143,7 @@ final class ClaudeNativeProvider: UsageProvider {
                 keyless.append(record.entry)
             }
         }
-
-        var byDay: [String: DayAccumulator] = [:]
-        for entry in best.values { byDay[entry.day, default: DayAccumulator()].add(entry) }
-        for entry in keyless     { byDay[entry.day, default: DayAccumulator()].add(entry) }
-
-        return byDay
-            .map { $0.value.makeDailyUsage(date: $0.key) }
-            .sorted { $0.date < $1.date }
+        return Array(best.values) + keyless
     }
 
     // MARK: - Discovery
@@ -179,11 +197,13 @@ final class ClaudeNativeProvider: UsageProvider {
 /// A single message's usage, tagged with its local day.
 private struct Entry {
     let day: String
+    let minute: Int          // local minute-of-day, 0…1439
     let input: Int
     let output: Int
     let cacheCreation: Int
     let cacheRead: Int
     let model: String?
+    var tokens: Int { input + output + cacheCreation + cacheRead }
 }
 
 /// One usage line's contribution plus its dedup key (nil = can't be deduped).

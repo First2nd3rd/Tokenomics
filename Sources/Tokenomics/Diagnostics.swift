@@ -19,6 +19,30 @@ enum Bench {
     }
 }
 
+/// Prints today's non-empty 5-minute token buckets (combined Claude+Codex) plus a
+/// TOTAL, to sanity-check the intraday rate chart. Invoked with `--dump-intraday`.
+enum DumpIntraday {
+    static func run() {
+        let provider = CombinedProvider([ClaudeNativeProvider(), CodexProvider()])
+        let semaphore = DispatchSemaphore(value: 0)
+        provider.fetchTodayByMinute(now: Date()) { minutes in
+            var out = ""
+            var total = 0
+            var start = 0
+            while start < 1440 {
+                let sum = minutes[start..<min(start + 5, 1440)].reduce(0, +)
+                total += sum
+                if sum > 0 { out += String(format: "%02d:%02d\t%d\n", start / 60, start % 60, sum) }
+                start += 5
+            }
+            out += "TOTAL\t\(total)\n"
+            FileHandle.standardOutput.write(Data(out.utf8))
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+}
+
 enum DumpDaily {
     /// `--dump-daily` dumps Claude; `--dump-codex` dumps Codex.
     static func run(provider: UsageProvider = ClaudeNativeProvider()) {

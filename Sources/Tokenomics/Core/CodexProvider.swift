@@ -21,6 +21,43 @@ final class CodexProvider: UsageProvider {
         }
     }
 
+    func fetchTodayByMinute(now: Date, completion: @escaping ([Int]) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            completion(Self.todayByMinute(now: now))
+        }
+    }
+
+    /// Today's tokens per local minute, from per-event cumulative deltas.
+    static func todayByMinute(now: Date) -> [Int] {
+        let today = Dashboard.dayKey(now, calendar: .current)
+        let decoder = JSONDecoder()
+        var buckets = Array(repeating: 0, count: 1440)
+
+        for file in rolloutFiles() {
+            guard let data = try? Data(contentsOf: file) else { continue }
+            var prevInput = 0, prevOutput = 0
+            for lineSlice in data.split(separator: 0x0A) where !lineSlice.isEmpty {
+                guard let line = try? decoder.decode(CodexLine.self, from: Data(lineSlice)),
+                      line.type == "event_msg",
+                      line.payload?.type == "token_count",
+                      let usage = line.payload?.info?.total_token_usage,
+                      let timestamp = line.timestamp,
+                      let dm = DayBucket.localDayMinute(from: timestamp)
+                else { continue }
+
+                let deltaInput = max(0, usage.input_tokens - prevInput)
+                let deltaOutput = max(0, usage.output_tokens - prevOutput)
+                prevInput = usage.input_tokens
+                prevOutput = usage.output_tokens
+
+                if dm.day == today {
+                    buckets[dm.minute] += deltaInput + deltaOutput   // delta of total tokens
+                }
+            }
+        }
+        return buckets
+    }
+
     static func readDaily() -> [DailyUsage] {
         let decoder = JSONDecoder()
         var byDay: [String: CodexDay] = [:]

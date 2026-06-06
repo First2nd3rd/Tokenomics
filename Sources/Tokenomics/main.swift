@@ -10,6 +10,10 @@ if CommandLine.arguments.contains("--dump-codex") {
     DumpDaily.run(provider: CodexProvider())
     exit(0)
 }
+if CommandLine.arguments.contains("--dump-intraday") {
+    DumpIntraday.run()
+    exit(0)
+}
 if CommandLine.arguments.contains("--bench") {
     Bench.run()
     exit(0)
