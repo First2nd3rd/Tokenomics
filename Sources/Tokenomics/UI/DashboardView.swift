@@ -6,6 +6,7 @@ import Charts
 struct DashboardView: View {
     @ObservedObject var model: DashboardModel
     var onRefresh: () -> Void
+    var onSettings: () -> Void
     var onQuit: () -> Void
 
     /// The rate chart's x-axis grows with the day (a little past "now"), min 3h, 24h cap.
@@ -31,9 +32,13 @@ struct DashboardView: View {
             sectionLabel("Cumulative · today vs typical → projected")
             cumulativeChart
 
-            HStack {
+            HStack(spacing: 12) {
                 Button("Refresh", action: onRefresh)
                 Spacer()
+                Button(action: onSettings) {
+                    Image(systemName: "gearshape")
+                }
+                .help("Settings")
                 Button("Quit", action: onQuit)
             }
             .font(.caption)
