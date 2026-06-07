@@ -80,6 +80,18 @@ enum IntradayCurve {
             predicted.insert(CumPoint(id: nowMinute, hour: nowHour, tokens: todayCum[nowMinute]), at: 0)
         }
 
+        // Pin the full-day lines to their end-of-day totals (the 5-min loop stops at
+        // minute 1435, ~23:55) so they reach the right edge and, crucially, the
+        // projected line ends exactly at `projectedTotal` — the same figure the
+        // headline subtitle shows.
+        let endOfDayID = 1440   // synthetic id/x for the midnight (hour 24) total
+        if hasTypical, typical.last?.id != endOfDayID {
+            typical.append(CumPoint(id: endOfDayID, hour: 24.0, tokens: Int(typicalAbs[1439])))
+        }
+        if let total = projectedTotal, predicted.last?.id != endOfDayID {
+            predicted.append(CumPoint(id: endOfDayID, hour: 24.0, tokens: Int(total)))
+        }
+
         return Series(today: today, typical: typical, predicted: predicted,
                       projectedTotal: projectedTotal.map(Int.init))
     }

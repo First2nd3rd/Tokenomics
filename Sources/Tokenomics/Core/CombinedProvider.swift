@@ -32,14 +32,14 @@ final class CombinedProvider: UsageProvider {
         }
     }
 
-    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void) {
+    func fetchDayMinuteMatrix(completion: @escaping ([String: [MinuteBucket]]) -> Void) {
         let group = DispatchGroup()
         let lock = NSLock()
         var merged: [String: [MinuteBucket]] = [:]
 
         for provider in providers {
             group.enter()
-            provider.fetchDayMinuteMatrix(now: now, lastDays: lastDays) { matrix in
+            provider.fetchDayMinuteMatrix { matrix in
                 lock.lock()
                 for (day, minutes) in matrix {
                     if var existing = merged[day] {

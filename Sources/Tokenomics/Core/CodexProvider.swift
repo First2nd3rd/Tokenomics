@@ -12,103 +12,99 @@ import Foundation
 ///   - cacheCreation   = 0 (Codex has no cache-creation concept)
 /// Cost comes from the shared price table; models without a price (e.g.
 /// `codex-auto-review`) contribute tokens but $0, matching ccusage.
+///
+/// Deltas are computed per file, so each file's parsed records are self-contained
+/// and cacheable by (mtime, size) — identical to the Claude reader — which keeps
+/// recurring refreshes off the full-rescan path once warm.
 final class CodexProvider: UsageProvider {
     let id = "codex"
 
+    /// Per-file parse cache with NDJSON persistence. "v1" is the format version.
+    private let cache = FileRecordCache<CodexRecord>(diskFileName: "codex-records-v1.ndjson",
+                                                     queueLabel: "tokenomics.codex-reader")
+
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
-            completion(.success(Self.readDaily()))
+            completion(.success(self.readDaily()))
         }
     }
 
-    private static func readDaily() -> [DailyUsage] {
-        let decoder = JSONDecoder()
-        var byDay: [String: CodexDay] = [:]
-
-        for file in rolloutFiles() {
-            var model: String?
-            var prevInput = 0, prevCached = 0, prevOutput = 0
-            LineReader.forEachLine(of: file) { lineData in
-                guard let line = try? decoder.decode(CodexLine.self, from: lineData) else { return }
-
-                if line.type == "turn_context", let m = line.payload?.model {
-                    model = m
-                    return
-                }
-
-                guard line.type == "event_msg",
-                      line.payload?.type == "token_count",
-                      let usage = line.payload?.info?.total_token_usage,
-                      let timestamp = line.timestamp,
-                      let day = DayBucket.localDay(from: timestamp)
-                else { return }
-
-                let cached = usage.cached_input_tokens ?? 0
-                // Deltas vs the previous cumulative (clamped ≥ 0 against resets).
-                let deltaInput = max(0, usage.input_tokens - prevInput)
-                let deltaCached = max(0, cached - prevCached)
-                let deltaOutput = max(0, usage.output_tokens - prevOutput)
-                prevInput = usage.input_tokens
-                prevCached = cached
-                prevOutput = usage.output_tokens
-
-                byDay[day, default: CodexDay()].add(
-                    input: max(0, deltaInput - deltaCached),
-                    output: deltaOutput,
-                    cacheRead: deltaCached,
-                    model: model
-                )
-            }
+    func fetchDayMinuteMatrix(completion: @escaping ([String: [MinuteBucket]]) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            completion(self.dayMinuteMatrix())
         }
+    }
 
+    /// All parsed records, re-parsing only rollout files whose mtime/size changed.
+    private func cachedRecords() -> [CodexRecord] {
+        cache.records(for: Self.rolloutFiles(), parse: Self.parseFile)
+    }
+
+    /// Per-day totals.
+    private func readDaily() -> [DailyUsage] {
+        var byDay: [String: CodexDay] = [:]
+        for r in cachedRecords() {
+            byDay[r.day, default: CodexDay()].add(input: r.input, output: r.output,
+                                                  cacheRead: r.cacheRead, model: r.model)
+        }
         return byDay
             .map { $0.value.makeDailyUsage(date: $0.key) }
             .sorted { $0.date < $1.date }
     }
 
-    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void) {
-        DispatchQueue.global(qos: .utility).async {
-            completion(Self.dayMinuteMatrix(now: now, lastDays: lastDays))
+    /// Per-minute buckets (by type + by model) for every day with data.
+    private func dayMinuteMatrix() -> [String: [MinuteBucket]] {
+        var byDay: [String: [MinuteBucket]] = [:]
+        for r in cachedRecords() {
+            byDay[r.day, default: Array(repeating: MinuteBucket(), count: 1440)][r.minute]
+                .add(input: r.input, output: r.output, cacheCreation: 0, cacheRead: r.cacheRead, model: r.model)
         }
+        return byDay
     }
 
-    /// Per-minute buckets (by type + by model) for each day, from per-event deltas.
-    private static func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [MinuteBucket]] {
+    /// Parse one rollout file into per-event delta records. Cumulative counters are
+    /// tracked within the file; the model carries forward from the latest
+    /// `turn_context`. Self-contained, so the result caches by (mtime, size).
+    private static func parseFile(_ file: URL) -> [CodexRecord] {
         let decoder = JSONDecoder()
-        var byDay: [String: [MinuteBucket]] = [:]
+        var records: [CodexRecord] = []
+        var model: String?
+        var prevInput = 0, prevCached = 0, prevOutput = 0
 
-        for file in rolloutFiles() {
-            var model: String?
-            var prevInput = 0, prevCached = 0, prevOutput = 0
-            LineReader.forEachLine(of: file) { lineData in
-                guard let line = try? decoder.decode(CodexLine.self, from: lineData) else { return }
+        LineReader.forEachLine(of: file) { lineData in
+            guard let line = try? decoder.decode(CodexLine.self, from: lineData) else { return }
 
-                if line.type == "turn_context", let m = line.payload?.model {
-                    model = m
-                    return
-                }
-
-                guard line.type == "event_msg",
-                      line.payload?.type == "token_count",
-                      let usage = line.payload?.info?.total_token_usage,
-                      let timestamp = line.timestamp,
-                      let dm = DayBucket.localDayMinute(from: timestamp)
-                else { return }
-
-                let cached = usage.cached_input_tokens ?? 0
-                let deltaInput = max(0, usage.input_tokens - prevInput)
-                let deltaCached = max(0, cached - prevCached)
-                let deltaOutput = max(0, usage.output_tokens - prevOutput)
-                prevInput = usage.input_tokens
-                prevCached = cached
-                prevOutput = usage.output_tokens
-
-                byDay[dm.day, default: Array(repeating: MinuteBucket(), count: 1440)][dm.minute]
-                    .add(input: max(0, deltaInput - deltaCached), output: deltaOutput,
-                         cacheCreation: 0, cacheRead: deltaCached, model: model)
+            if line.type == "turn_context", let m = line.payload?.model {
+                model = m
+                return
             }
+
+            guard line.type == "event_msg",
+                  line.payload?.type == "token_count",
+                  let usage = line.payload?.info?.total_token_usage,
+                  let timestamp = line.timestamp,
+                  let dm = DayBucket.localDayMinute(from: timestamp)
+            else { return }
+
+            let cached = usage.cached_input_tokens ?? 0
+            // Deltas vs the previous cumulative (clamped ≥ 0 against resets).
+            let deltaInput = max(0, usage.input_tokens - prevInput)
+            let deltaCached = max(0, cached - prevCached)
+            let deltaOutput = max(0, usage.output_tokens - prevOutput)
+            prevInput = usage.input_tokens
+            prevCached = cached
+            prevOutput = usage.output_tokens
+
+            records.append(CodexRecord(
+                day: dm.day,
+                minute: dm.minute,
+                input: max(0, deltaInput - deltaCached),
+                output: deltaOutput,
+                cacheRead: deltaCached,
+                model: model
+            ))
         }
-        return DayBucket.recentDays(byDay, now: now, count: lastDays)
+        return records
     }
 
     /// All `rollout-*.jsonl` under `~/.codex/sessions` (or `$CODEX_HOME`).
@@ -128,6 +124,24 @@ final class CodexProvider: UsageProvider {
             files.append(url)
         }
         return files
+    }
+}
+
+// MARK: - Cached record
+
+/// One Codex token_count event's contribution, already reduced to per-event
+/// deltas and mapped to the normalized token types. Short coding keys keep the
+/// persisted cache compact.
+private struct CodexRecord: Codable {
+    let day: String
+    let minute: Int          // local minute-of-day, 0…1439
+    let input: Int           // non-cached input
+    let output: Int
+    let cacheRead: Int
+    let model: String?
+
+    enum CodingKeys: String, CodingKey {
+        case day = "d", minute = "n", input = "i", output = "o", cacheRead = "r", model = "m"
     }
 }
 

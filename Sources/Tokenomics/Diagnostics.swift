@@ -70,7 +70,7 @@ enum DumpIntraday {
     static func run() {
         let provider = CombinedProvider([ClaudeNativeProvider(), CodexProvider()])
         let now = Date()
-        let matrix = waitFor { provider.fetchDayMinuteMatrix(now: now, lastDays: 0, completion: $0) }
+        let matrix = waitFor { provider.fetchDayMinuteMatrix(completion: $0) }
         let minutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: MinuteBucket(), count: 1440)
 
         var out = ""
@@ -93,7 +93,9 @@ enum DumpCurve {
     static func run() {
         let provider = CombinedProvider([ClaudeNativeProvider(), CodexProvider()])
         let now = Date()
-        let matrix = waitFor { provider.fetchDayMinuteMatrix(now: now, lastDays: 14, completion: $0) }
+        let full = waitFor { provider.fetchDayMinuteMatrix(completion: $0) }
+        // Mirror UsageStore: merge first (CombinedProvider), then trim to the window.
+        let matrix = DayBucket.recentDays(full, now: now, count: 14)
         let series = IntradayCurve.build(matrix: matrix, now: now)
 
         var out = ""

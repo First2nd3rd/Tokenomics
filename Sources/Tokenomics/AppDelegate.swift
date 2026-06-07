@@ -53,34 +53,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // all describe the same instant.
         let now = Date()
 
-        store.refresh { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let snapshot):
-                let dashboard = Dashboard.make(from: snapshot, now: now)
-                self.statusItem.button?.title = "🪙 " + Format.tokensShort(dashboard.headline?.totalTokens ?? 0)
-                self.model.headline = Self.headlineText(dashboard)
-                self.model.subtitle = Self.subtitleText(dashboard)
-                self.model.models = dashboard.headline?.models ?? []
-            case .failure:
-                self.statusItem.button?.title = "🪙 —"
-                self.model.headline = "—"
-                self.model.subtitle = "usage data unavailable"
-            }
+        // Fetch the daily series and the minute matrix together, then present them
+        // in one pass: the headline projection is derived from the same curve the
+        // popover draws, so the number and the chart can't disagree.
+        let group = DispatchGroup()
+        var snapshotResult: Result<UsageSnapshot, Error>?
+        var matrix: [String: [MinuteBucket]] = [:]
+
+        group.enter()
+        store.refresh { snapshotResult = $0; group.leave() }
+
+        group.enter()
+        store.refreshMatrix(now: now, lastDays: Self.matrixDays) { matrix = $0; group.leave() }
+
+        group.notify(queue: .main) { [weak self] in
+            self?.present(snapshotResult: snapshotResult, matrix: matrix, now: now)
+        }
+    }
+
+    /// Push one fully-assembled refresh into the view model (main queue).
+    private func present(snapshotResult: Result<UsageSnapshot, Error>?,
+                         matrix: [String: [MinuteBucket]],
+                         now: Date) {
+        guard case .success(let snapshot)? = snapshotResult else {
+            statusItem.button?.title = "🪙 —"
+            model.headline = "—"
+            model.subtitle = "usage data unavailable"
+            model.rate5min = []
+            model.cumToday = []; model.cumTypical = []; model.cumPredicted = []
+            return
         }
 
-        store.refreshMatrix(now: now, lastDays: Self.matrixDays) { [weak self] matrix in
-            guard let self else { return }
-            let comps = Calendar.current.dateComponents([.hour, .minute], from: now)
-            let nowMinute = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
-            let todayMinutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: MinuteBucket(), count: 1440)
-            self.model.updateRate(today: todayMinutes, nowMinute: nowMinute)
+        let dashboard = Dashboard.make(from: snapshot, now: now)
+        let series = IntradayCurve.build(matrix: matrix, now: now)
 
-            let series = IntradayCurve.build(matrix: matrix, now: now)
-            self.model.cumToday = series.today
-            self.model.cumTypical = series.typical
-            self.model.cumPredicted = series.predicted
-        }
+        // Headline.
+        statusItem.button?.title = "🪙 " + Format.tokensShort(dashboard.headline?.totalTokens ?? 0)
+        model.headline = Self.headlineText(dashboard)
+        model.subtitle = Self.subtitleText(dashboard, series: series)
+        model.models = dashboard.headline?.models ?? []
+
+        // Charts.
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: now)
+        let nowMinute = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+        let todayMinutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: MinuteBucket(), count: 1440)
+        model.updateRate(today: todayMinutes, nowMinute: nowMinute)
+        model.cumToday = series.today
+        model.cumTypical = series.typical
+        model.cumPredicted = series.predicted
     }
 
     private static func headlineText(_ d: Dashboard) -> String {
@@ -88,14 +108,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return "🪙 \(Format.tokensShort(h.totalTokens)) · \(Format.cost(h.totalCost))"
     }
 
-    private static func subtitleText(_ d: Dashboard) -> String {
+    /// Subtitle projection comes from the cumulative curve (`series.projectedTotal`),
+    /// the same value the popover's projected line ends at. Cost is scaled by the
+    /// same token multiplier so the two figures stay consistent.
+    private static func subtitleText(_ d: Dashboard, series: IntradayCurve.Series) -> String {
         guard d.isToday else {
             return d.headline.map { "Showing \($0.date)" } ?? ""
         }
-        guard let pt = d.projectedTokens, let pc = d.projectedCost else {
+        guard let pt = series.projectedTotal, let h = d.headline, h.totalTokens > 0 else {
             return "Projected — warming up"
         }
-        var line = "Projected ~\(Format.tokensShort(pt)) · ~\(Format.cost(pc))"
+        let projectedCost = h.totalCost * Double(pt) / Double(h.totalTokens)
+        var line = "Projected ~\(Format.tokensShort(pt)) · ~\(Format.cost(projectedCost))"
         if let avg = d.avgTokens, let delta = Format.deltaPct(pt, vs: avg) {
             line += "   vs 7d \(delta)"
         }

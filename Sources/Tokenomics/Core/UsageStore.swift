@@ -23,10 +23,13 @@ final class UsageStore {
         }
     }
 
-    /// Day→minute matrix (today + recent days), delivered on the main queue.
+    /// Day→minute matrix (today + the `lastDays` prior days with data), delivered on
+    /// the main queue. Providers return their full matrix; the merge happens first
+    /// and the window is trimmed once here, so it stays exact across providers.
     func refreshMatrix(now: Date = Date(), lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void) {
-        provider.fetchDayMinuteMatrix(now: now, lastDays: lastDays) { matrix in
-            DispatchQueue.main.async { completion(matrix) }
+        provider.fetchDayMinuteMatrix { matrix in
+            let trimmed = DayBucket.recentDays(matrix, now: now, count: lastDays)
+            DispatchQueue.main.async { completion(trimmed) }
         }
     }
 }
