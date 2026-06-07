@@ -38,6 +38,11 @@ struct DashboardView: View {
             sectionLabel("Cumulative · today vs typical → projected")
             cumulativeChart
 
+            if !visiblePayback.isEmpty {
+                sectionLabel("This month · subscription payback")
+                ForEach(visiblePayback) { paybackRow($0) }
+            }
+
             HStack(spacing: 12) {
                 Button("Refresh", action: onRefresh)
                 Spacer()
@@ -209,6 +214,62 @@ struct DashboardView: View {
         }
         .chartYAxis { tokenAxis }
         .frame(width: 380, height: 84)
+    }
+
+    // MARK: - Break-even (this month, per vendor)
+
+    /// Show a vendor only when there's something to say: a subscription to break
+    /// even against, or real API spend this month.
+    private var visiblePayback: [VendorBreakEven] {
+        model.breakEven.filter { $0.monthlyFee != nil || $0.monthToDateCost > 0 }
+    }
+
+    private func paybackRow(_ be: VendorBreakEven) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(be.vendor.displayName).font(.caption).fontWeight(.medium)
+                Spacer()
+                if let m = be.multiple {
+                    Text(Format.multiple(m))
+                        .font(.caption).fontWeight(.semibold)
+                        .foregroundStyle(m >= 1 ? Color.green : .primary)
+                } else {
+                    Text("API").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            if let progress = be.progress {
+                paybackBar(progress: progress, brokeEven: (be.multiple ?? 0) >= 1, vendor: be.vendor)
+            }
+            Text(paybackDetail(be)).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(width: 380, alignment: .leading)
+    }
+
+    /// Fixed-width bar (no GeometryReader — that confuses NSPopover's content
+    /// sizing and pushes the popover off-screen).
+    private func paybackBar(progress: Double, brokeEven: Bool, vendor: Vendor) -> some View {
+        let track: CGFloat = 380
+        return ZStack(alignment: .leading) {
+            Capsule().fill(Color.secondary.opacity(0.15)).frame(width: track, height: 6)
+            Capsule()
+                .fill(brokeEven ? Color.green : vendorColor(vendor))
+                .frame(width: max(2, track * CGFloat(progress)), height: 6)
+        }
+        .frame(width: track, height: 6)
+    }
+
+    private func paybackDetail(_ be: VendorBreakEven) -> String {
+        let cost = Format.cost(be.monthToDateCost)
+        guard let fee = be.monthlyFee else { return "\(cost) this month · API" }
+        var line = "\(cost) / \(Format.cost(fee)) this month"
+        if let day = be.brokeEvenOn { line += " · broke even \(Format.shortMonthDay(day))" }
+        return line
+    }
+
+    /// Vendor color, taken from the same palette as the by-model rate chart so the
+    /// two surfaces match (Claude orange, GPT teal).
+    private func vendorColor(_ vendor: Vendor) -> Color {
+        ModelColors.color(for: vendor == .claude ? "claude" : "gpt")
     }
 
     // MARK: - Shared axes

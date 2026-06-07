@@ -32,6 +32,13 @@ enum ModelColors {
         return entries
     }
 
+    /// Representative color for a vendor/model hue, matching the by-model chart's
+    /// single-model shade (same saturation/brightness `assign` uses when a vendor has
+    /// one model), so other surfaces can color-match the chart.
+    static func color(for model: String) -> Color {
+        Color(hue: hue(for: model), saturation: 0.72, brightness: 0.82)
+    }
+
     /// A compact label for legends: drop the `claude-` prefix and trailing date.
     static func shortName(_ model: String) -> String {
         var name = model.hasPrefix("claude-") ? String(model.dropFirst("claude-".count)) : model

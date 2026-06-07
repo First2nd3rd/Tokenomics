@@ -19,6 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Default Custom-plan fees so the engine (raw UserDefaults) and the Settings
+        // fields (@AppStorage) agree before the user edits them.
+        UserDefaults.standard.register(defaults: [
+            CostBasisStore.claudeCustomKey: 100,
+            CostBasisStore.gptCustomKey: 20,
+        ])
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         popover.behavior = .transient
@@ -57,40 +64,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // in one pass: the headline projection is derived from the same curve the
         // popover draws, so the number and the chart can't disagree.
         let group = DispatchGroup()
-        var snapshotResult: Result<UsageSnapshot, Error>?
+        var perVendor: [String: [DailyUsage]] = [:]
         var matrix: [String: [MinuteBucket]] = [:]
 
         group.enter()
-        store.refresh { snapshotResult = $0; group.leave() }
+        store.refreshByVendor { perVendor = $0; group.leave() }
 
         group.enter()
         store.refreshMatrix(now: now, lastDays: Self.matrixDays) { matrix = $0; group.leave() }
 
         group.notify(queue: .main) { [weak self] in
-            self?.present(snapshotResult: snapshotResult, matrix: matrix, now: now)
+            self?.present(perVendor: perVendor, matrix: matrix, now: now)
         }
     }
 
-    /// Push one fully-assembled refresh into the view model (main queue).
-    private func present(snapshotResult: Result<UsageSnapshot, Error>?,
+    /// Push one fully-assembled refresh into the view model (main queue). The
+    /// combined daily snapshot is the merge of the per-vendor series.
+    private func present(perVendor: [String: [DailyUsage]],
                          matrix: [String: [MinuteBucket]],
                          now: Date) {
-        guard case .success(let snapshot)? = snapshotResult else {
-            statusItem.button?.title = "🪙 —"
-            model.headline = "—"
-            model.subtitle = "usage data unavailable"
-            model.rate5min = []
-            model.cumToday = []; model.cumTypical = []; model.cumPredicted = []
-            return
-        }
-
+        let snapshot = UsageSnapshot(days: CombinedProvider.merge(Array(perVendor.values)))
         let dashboard = Dashboard.make(from: snapshot, now: now)
         let series = IntradayCurve.build(matrix: matrix, now: now)
 
         // Headline.
-        statusItem.button?.title = "🪙 " + Format.tokensShort(dashboard.headline?.totalTokens ?? 0)
-        model.headline = Self.headlineText(dashboard)
-        model.subtitle = Self.subtitleText(dashboard, series: series)
+        if let headline = dashboard.headline {
+            statusItem.button?.title = "🪙 " + Format.tokensShort(headline.totalTokens)
+            model.headline = Self.headlineText(dashboard)
+            model.subtitle = Self.subtitleText(dashboard, series: series)
+        } else {
+            statusItem.button?.title = "🪙 —"
+            model.headline = "—"
+            model.subtitle = "usage data unavailable"
+        }
         model.models = dashboard.headline?.models ?? []
 
         // Charts.
@@ -101,6 +107,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.cumToday = series.today
         model.cumTypical = series.typical
         model.cumPredicted = series.predicted
+
+        // Per-vendor subscription break-even (this month).
+        model.breakEven = BreakEven.compute(perVendor: perVendor, now: now,
+                                            claude: CostBasisStore.claude(),
+                                            gpt: CostBasisStore.gpt())
     }
 
     private static func headlineText(_ d: Dashboard) -> String {
@@ -173,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 340, height: 150),
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 392),
                 styleMask: [.titled, .closable],
                 backing: .buffered, defer: false
             )

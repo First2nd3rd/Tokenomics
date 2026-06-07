@@ -18,6 +18,10 @@ struct DailyUsage {
 protocol UsageProvider {
     var id: String { get }
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void)
+    /// Per-vendor daily series (provider id → days). A leaf provider reports its own
+    /// id; `CombinedProvider` unions its children. The break-even view needs each
+    /// vendor's cost separately, which the merged daily series throws away.
+    func fetchDailyByVendor(completion: @escaping ([String: [DailyUsage]]) -> Void)
     /// Per-minute token counts (split by type + by model) for EVERY day with data
     /// (day → [1440]). Returning the full matrix lets the caller merge providers
     /// first and then trim to a precise day window — trimming per provider here
@@ -30,5 +34,12 @@ extension UsageProvider {
     /// Providers without intraday support contribute an empty matrix.
     func fetchDayMinuteMatrix(completion: @escaping ([String: [MinuteBucket]]) -> Void) {
         completion([:])
+    }
+
+    /// A leaf provider reports its daily series under its own id.
+    func fetchDailyByVendor(completion: @escaping ([String: [DailyUsage]]) -> Void) {
+        fetchDaily { result in
+            completion([id: (try? result.get()) ?? []])
+        }
     }
 }

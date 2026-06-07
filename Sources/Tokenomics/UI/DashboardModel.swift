@@ -24,6 +24,9 @@ final class DashboardModel: ObservableObject {
     @Published var cumTypical: [CumPoint] = []
     @Published var cumPredicted: [CumPoint] = []
 
+    // Per-vendor subscription break-even (this month).
+    @Published var breakEven: [VendorBreakEven] = []
+
     private static let bucketMinutes = 5
 
     /// Collapse per-minute token counts into 5-minute buckets up to `nowMinute`.

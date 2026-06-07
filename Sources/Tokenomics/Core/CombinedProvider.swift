@@ -12,24 +12,31 @@ final class CombinedProvider: UsageProvider {
         self.providers = providers
     }
 
+    /// Combined daily series = the per-vendor series merged. Kept as a thin wrapper
+    /// over `fetchDailyByVendor` (the path the app actually uses) so the two can't
+    /// drift; satisfies the protocol and stays available for diagnostics.
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
+        fetchDailyByVendor { byVendor in
+            completion(.success(Self.merge(Array(byVendor.values))))
+        }
+    }
+
+    func fetchDailyByVendor(completion: @escaping ([String: [DailyUsage]]) -> Void) {
         let group = DispatchGroup()
         let lock = NSLock()
-        var collected: [[DailyUsage]] = []
+        var merged: [String: [DailyUsage]] = [:]
 
         for provider in providers {
             group.enter()
-            provider.fetchDaily { result in
-                if case .success(let days) = result {
-                    lock.lock(); collected.append(days); lock.unlock()
-                }
+            provider.fetchDailyByVendor { byVendor in
+                lock.lock()
+                for (id, days) in byVendor { merged[id, default: []].append(contentsOf: days) }
+                lock.unlock()
                 group.leave()
             }
         }
 
-        group.notify(queue: .global(qos: .utility)) {
-            completion(.success(Self.merge(collected)))
-        }
+        group.notify(queue: .global(qos: .utility)) { completion(merged) }
     }
 
     func fetchDayMinuteMatrix(completion: @escaping ([String: [MinuteBucket]]) -> Void) {

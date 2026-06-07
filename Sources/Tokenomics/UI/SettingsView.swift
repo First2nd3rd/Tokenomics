@@ -41,6 +41,10 @@ final class LoginItemModel: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var login: LoginItemModel
     @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
+    @AppStorage(CostBasisStore.claudePlanKey) private var claudePlan: ClaudePlan = .api
+    @AppStorage(CostBasisStore.gptPlanKey) private var gptPlan: GPTPlan = .api
+    @AppStorage(CostBasisStore.claudeCustomKey) private var claudeCustomFee: Double = 100
+    @AppStorage(CostBasisStore.gptCustomKey) private var gptCustomFee: Double = 20
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -66,11 +70,54 @@ struct SettingsView: View {
                 .fixedSize()
             }
 
+            Divider().padding(.vertical, 2)
+            Text("Subscription — for break-even")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            row("Claude plan",
+                subtitle: "Compared against Claude's API-equivalent cost.") {
+                planPicker($claudePlan)
+            }
+            if claudePlan == .custom { customFeeField($claudeCustomFee) }
+
+            row("GPT plan",
+                subtitle: "Compared against Codex/GPT's API-equivalent cost.") {
+                planPicker($gptPlan)
+            }
+            if gptPlan == .custom { customFeeField($gptCustomFee) }
+
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 360, height: 210, alignment: .topLeading)
+        .frame(width: 380, height: 392, alignment: .topLeading)
         .onAppear { login.refresh() }
+    }
+
+    /// A menu picker over any SubscriptionPlan enum (Claude / GPT share this).
+    private func planPicker<P: SubscriptionPlan>(_ selection: Binding<P>) -> some View {
+        Picker("", selection: selection) {
+            ForEach(Array(P.allCases)) { Text($0.label).tag($0) }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .fixedSize()
+    }
+
+    /// Right-aligned "$ ___ / mo" field, shown when a vendor's plan is Custom.
+    private func customFeeField(_ value: Binding<Double>) -> some View {
+        HStack(spacing: 6) {
+            Spacer()
+            Text("$").foregroundStyle(.secondary)
+            TextField("", value: value, format: .number)
+                .frame(width: 70)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .multilineTextAlignment(.trailing)
+            Text("/ mo").foregroundStyle(.secondary)
+        }
+        .font(.caption)
     }
 
     /// One settings line: title (+ subtitle) on the left, control right-aligned.

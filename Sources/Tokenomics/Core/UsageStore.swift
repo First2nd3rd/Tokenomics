@@ -14,12 +14,12 @@ final class UsageStore {
         self.provider = provider
     }
 
-    func refresh(completion: @escaping (Result<UsageSnapshot, Error>) -> Void) {
-        provider.fetchDaily { result in
-            let mapped = result.map { days -> UsageSnapshot in
-                UsageSnapshot(days: days.sorted { $0.date < $1.date })
-            }
-            DispatchQueue.main.async { completion(mapped) }
+    /// Per-vendor daily series (provider id → days), delivered on the main queue.
+    /// The combined snapshot is just the merge of these, so this is the single
+    /// source for both the headline and the per-vendor break-even.
+    func refreshByVendor(completion: @escaping ([String: [DailyUsage]]) -> Void) {
+        provider.fetchDailyByVendor { byVendor in
+            DispatchQueue.main.async { completion(byVendor) }
         }
     }
 
