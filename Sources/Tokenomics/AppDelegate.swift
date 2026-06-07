@@ -156,8 +156,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(nil)
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            keepPopoverOnScreen(below: button)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    /// Work around an NSPopover quirk for menu-bar items: with tall content it
+    /// anchors the arrow into the menu bar and pushes the body's top off the screen
+    /// (the headline hides behind the menu bar). If the popover window overflows the
+    /// visible area's top, slide it back down so the whole body is on screen.
+    private func keepPopoverOnScreen(below button: NSStatusBarButton) {
+        guard let window = popover.contentViewController?.view.window,
+              let screen = button.window?.screen ?? NSScreen.main else { return }
+        let overflow = window.frame.maxY - screen.visibleFrame.maxY
+        guard overflow > 0 else { return }
+        var frame = window.frame
+        frame.origin.y -= overflow
+        window.setFrame(frame, display: true)
     }
 
     /// Show a transient Refresh/Quit menu without permanently attaching it (so the
