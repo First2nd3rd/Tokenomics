@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Prior days fetched for the cumulative chart's typical-day curve — wider than
     /// Dashboard's 7-day average window to give IntradayCurve enough history.
     private static let matrixDays = 14
+    /// How many recent days the daily stacked-bar chart shows.
+    private static let dailyBarDays = 14
 
     private var statusItem: NSStatusItem!
     private let store = UsageStore()
@@ -112,6 +114,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.breakEven = BreakEven.compute(perVendor: perVendor, now: now,
                                             claude: CostBasisStore.claude(),
                                             gpt: CostBasisStore.gpt())
+
+        // Recent days for the daily bar chart.
+        model.dailyBars = Array(snapshot.days.suffix(Self.dailyBarDays))
     }
 
     private static func headlineText(_ d: Dashboard) -> String {

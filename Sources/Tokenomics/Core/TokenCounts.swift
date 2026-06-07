@@ -24,6 +24,15 @@ struct TokenCounts {
     }
 }
 
+extension DailyUsage {
+    /// The four token components as a `TokenCounts`, so daily data can drive the
+    /// same by-type chart bands as the intraday buckets.
+    var counts: TokenCounts {
+        TokenCounts(input: inputTokens, output: outputTokens,
+                    cacheCreation: cacheCreationTokens, cacheRead: cacheReadTokens)
+    }
+}
+
 /// One bucket (minute / 5-min) holding token counts split by type AND a per-model
 /// total — enough to drive the line, by-type, and by-model rate charts.
 struct MinuteBucket {

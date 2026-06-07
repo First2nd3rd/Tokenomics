@@ -27,6 +27,9 @@ final class DashboardModel: ObservableObject {
     // Per-vendor subscription break-even (this month).
     @Published var breakEven: [VendorBreakEven] = []
 
+    // Recent days for the daily stacked-by-type bar chart (ascending by date).
+    @Published var dailyBars: [DailyUsage] = []
+
     private static let bucketMinutes = 5
 
     /// Collapse per-minute token counts into 5-minute buckets up to `nowMinute`.

@@ -10,6 +10,9 @@ struct DashboardView: View {
     var onQuit: () -> Void
 
     @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
+    /// Which page of the second-chart deck is showing (0 = cumulative, 1 = daily bars).
+    @AppStorage("secondChartPage") private var deckPage = 0
+    private static let deckPageCount = 2
 
     /// End the x-axis at "now" (the last bucket's position), so there's no empty
     /// tail and the right edge advances each refresh.
@@ -35,8 +38,11 @@ struct DashboardView: View {
             if rateStyle == .stacked { rateLegend }
             else if rateStyle == .model { modelLegend }
 
-            sectionLabel("Cumulative · today vs typical → projected")
-            cumulativeChart
+            sectionLabel(deckTitle)
+            deckChart
+                .contentShape(Rectangle())
+                .onTapGesture { deckPage = (deckPage + 1) % Self.deckPageCount }
+            deckFooter
 
             if !visiblePayback.isEmpty {
                 sectionLabel("This month · subscription payback")
@@ -69,15 +75,16 @@ struct DashboardView: View {
     private struct Band {
         let name: String
         let color: Color
-        let value: (RatePoint) -> Int
+        let value: (TokenCounts) -> Int
     }
 
-    /// Stack order (bottom → top) + colors; also drives the legend.
+    /// Stack order (bottom → top) + colors; drives the legend and both the intraday
+    /// stacked area and the daily bars (keyed off TokenCounts so both can share it).
     private static let bands: [Band] = [
-        Band(name: "Cache read",  color: .blue,   value: { $0.counts.cacheRead }),
-        Band(name: "Cache write", color: .teal,   value: { $0.counts.cacheCreation }),
-        Band(name: "Input",       color: .green,  value: { $0.counts.input }),
-        Band(name: "Output",      color: .orange, value: { $0.counts.output }),
+        Band(name: "Cache read",  color: .blue,   value: { $0.cacheRead }),
+        Band(name: "Cache write", color: .teal,   value: { $0.cacheCreation }),
+        Band(name: "Input",       color: .green,  value: { $0.input }),
+        Band(name: "Output",      color: .orange, value: { $0.output }),
     ]
 
     private var rateTitle: String {
@@ -119,7 +126,7 @@ struct DashboardView: View {
     private var stackedRateChart: some View {
         Chart(model.rate5min) { point in
             ForEach(Self.bands, id: \.name) { band in
-                AreaMark(x: .value("Time", point.hour), y: .value("Tokens", band.value(point)))
+                AreaMark(x: .value("Time", point.hour), y: .value("Tokens", band.value(point.counts)))
                     .foregroundStyle(by: .value("Type", band.name))
                     .interpolationMethod(.monotone)
             }
@@ -178,6 +185,69 @@ struct DashboardView: View {
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
+    }
+
+    // MARK: - Second-chart deck (cumulative ⇄ daily bars)
+
+    private var deckTitle: String {
+        deckPage == 1 ? "Daily · tokens by type · last \(model.dailyBars.count)d"
+                      : "Cumulative · today vs typical → projected"
+    }
+
+    @ViewBuilder private var deckChart: some View {
+        if deckPage == 1 { dailyBarChart } else { cumulativeChart }
+    }
+
+    /// Page dots, plus the type legend while the bars are showing.
+    private var deckFooter: some View {
+        HStack(spacing: 8) {
+            if deckPage == 1 { rateLegend }
+            Spacer(minLength: 0)
+            HStack(spacing: 5) {
+                ForEach(0..<Self.deckPageCount, id: \.self) { page in
+                    Circle()
+                        .fill(page == deckPage ? Color.primary.opacity(0.6) : Color.secondary.opacity(0.25))
+                        .frame(width: 6, height: 6)
+                        .onTapGesture { deckPage = page }
+                }
+            }
+        }
+        .frame(width: 380)
+    }
+
+    // MARK: - Daily bar chart (stacked by token type)
+
+    private var dailyBarChart: some View {
+        Chart {
+            ForEach(model.dailyBars, id: \.date) { day in
+                ForEach(Self.bands, id: \.name) { band in
+                    BarMark(
+                        x: .value("Day", day.date),
+                        y: .value("Tokens", band.value(day.counts))
+                    )
+                    .foregroundStyle(by: .value("Type", band.name))
+                }
+            }
+        }
+        .chartForegroundStyleScale(domain: Self.bands.map(\.name), range: Self.bands.map(\.color))
+        .chartLegend(.hidden)
+        .chartXAxis {
+            AxisMarks(values: sparseBarLabels) { value in
+                AxisValueLabel {
+                    if let day = value.as(String.self) { Text(Format.shortMonthDay(day)) }
+                }
+            }
+        }
+        .chartYAxis { tokenAxis }
+        .frame(width: 380, height: 84)
+    }
+
+    /// ~4 evenly spaced day keys to label, so 14 bars don't crowd the axis.
+    private var sparseBarLabels: [String] {
+        let days = model.dailyBars
+        guard !days.isEmpty else { return [] }
+        let step = max(1, days.count / 4)
+        return stride(from: 0, to: days.count, by: step).map { days[$0].date }
     }
 
     // MARK: - Cumulative chart (today / typical / predicted)
