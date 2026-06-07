@@ -66,22 +66,29 @@ final class CodexProvider: UsageProvider {
             .sorted { $0.date < $1.date }
     }
 
-    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [TokenCounts]]) -> Void) {
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             completion(Self.dayMinuteMatrix(now: now, lastDays: lastDays))
         }
     }
 
-    /// Per-minute token counts (by type) for each day, from per-event cumulative deltas.
-    private static func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [TokenCounts]] {
+    /// Per-minute buckets (by type + by model) for each day, from per-event deltas.
+    private static func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [MinuteBucket]] {
         let decoder = JSONDecoder()
-        var byDay: [String: [TokenCounts]] = [:]
+        var byDay: [String: [MinuteBucket]] = [:]
 
         for file in rolloutFiles() {
+            var model: String?
             var prevInput = 0, prevCached = 0, prevOutput = 0
             LineReader.forEachLine(of: file) { lineData in
-                guard let line = try? decoder.decode(CodexLine.self, from: lineData),
-                      line.type == "event_msg",
+                guard let line = try? decoder.decode(CodexLine.self, from: lineData) else { return }
+
+                if line.type == "turn_context", let m = line.payload?.model {
+                    model = m
+                    return
+                }
+
+                guard line.type == "event_msg",
                       line.payload?.type == "token_count",
                       let usage = line.payload?.info?.total_token_usage,
                       let timestamp = line.timestamp,
@@ -96,9 +103,9 @@ final class CodexProvider: UsageProvider {
                 prevCached = cached
                 prevOutput = usage.output_tokens
 
-                byDay[dm.day, default: Array(repeating: TokenCounts(), count: 1440)][dm.minute]
+                byDay[dm.day, default: Array(repeating: MinuteBucket(), count: 1440)][dm.minute]
                     .add(input: max(0, deltaInput - deltaCached), output: deltaOutput,
-                         cacheCreation: 0, cacheRead: deltaCached)
+                         cacheCreation: 0, cacheRead: deltaCached, model: model)
             }
         }
         return DayBucket.recentDays(byDay, now: now, count: lastDays)

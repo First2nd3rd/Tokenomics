@@ -73,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let comps = Calendar.current.dateComponents([.hour, .minute], from: now)
             let nowMinute = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
-            let todayMinutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: TokenCounts(), count: 1440)
+            let todayMinutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: MinuteBucket(), count: 1440)
             self.model.updateRate(today: todayMinutes, nowMinute: nowMinute)
 
             let series = IntradayCurve.build(matrix: matrix, now: now)

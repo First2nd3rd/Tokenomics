@@ -33,6 +33,7 @@ struct DashboardView: View {
             sectionLabel(rateTitle)
             rateChart
             if rateStyle == .stacked { rateLegend }
+            else if rateStyle == .model { modelLegend }
 
             sectionLabel("Cumulative · today vs typical → projected")
             cumulativeChart
@@ -68,10 +69,10 @@ struct DashboardView: View {
 
     /// Stack order (bottom → top) + colors; also drives the legend.
     private static let bands: [Band] = [
-        Band(name: "Cache read",  color: .blue,   value: { $0.cacheRead }),
-        Band(name: "Cache write", color: .teal,   value: { $0.cacheCreation }),
-        Band(name: "Input",       color: .green,  value: { $0.input }),
-        Band(name: "Output",      color: .orange, value: { $0.output }),
+        Band(name: "Cache read",  color: .blue,   value: { $0.counts.cacheRead }),
+        Band(name: "Cache write", color: .teal,   value: { $0.counts.cacheCreation }),
+        Band(name: "Input",       color: .green,  value: { $0.counts.input }),
+        Band(name: "Output",      color: .orange, value: { $0.counts.output }),
     ]
 
     private var rateTitle: String {
@@ -80,7 +81,11 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private var rateChart: some View {
-        if rateStyle == .stacked { stackedRateChart } else { lineRateChart }
+        switch rateStyle {
+        case .line:    lineRateChart
+        case .stacked: stackedRateChart
+        case .model:   modelRateChart
+        }
     }
 
     /// Default: a single accent line over a faint area fill (the total per bucket).
@@ -128,6 +133,41 @@ struct DashboardView: View {
                 HStack(spacing: 4) {
                     RoundedRectangle(cornerRadius: 2).fill(band.color).frame(width: 8, height: 8)
                     Text(band.name)
+                }
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+    }
+
+    // MARK: - Rate chart (by model)
+
+    private var modelColorOrder: [ModelColors.Entry] { ModelColors.assign(model.models) }
+
+    private var modelRateChart: some View {
+        let order = modelColorOrder
+        return Chart(model.rate5min) { point in
+            ForEach(order) { entry in
+                AreaMark(x: .value("Time", point.hour),
+                         y: .value("Tokens", point.byModel[entry.model] ?? 0))
+                    .foregroundStyle(by: .value("Model", entry.model))
+                    .interpolationMethod(.monotone)
+            }
+        }
+        .chartForegroundStyleScale(domain: order.map(\.model), range: order.map(\.color))
+        .chartLegend(.hidden)
+        .chartXScale(domain: 0...rateUpperBound)
+        .chartXAxis { hourAxis }
+        .chartYAxis { tokenAxis }
+        .frame(width: 380, height: 84)
+    }
+
+    private var modelLegend: some View {
+        HStack(spacing: 12) {
+            ForEach(modelColorOrder) { entry in
+                HStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 2).fill(entry.color).frame(width: 8, height: 8)
+                    Text(ModelColors.shortName(entry.model))
                 }
             }
         }

@@ -37,19 +37,19 @@ final class ClaudeNativeProvider: UsageProvider {
         }
     }
 
-    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [TokenCounts]]) -> Void) {
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void) {
         queue.async {
             completion(self.dayMinuteMatrix(now: now, lastDays: lastDays))
         }
     }
 
-    /// Per-minute token counts (by type) for each day (deduped), trimmed to recent days.
-    private func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [TokenCounts]] {
-        var byDay: [String: [TokenCounts]] = [:]
+    /// Per-minute buckets (by type + by model) for each day (deduped), trimmed to recent days.
+    private func dayMinuteMatrix(now: Date, lastDays: Int) -> [String: [MinuteBucket]] {
+        var byDay: [String: [MinuteBucket]] = [:]
         for entry in Self.dedupe(cachedRecords()) {
-            byDay[entry.day, default: Array(repeating: TokenCounts(), count: 1440)][entry.minute]
+            byDay[entry.day, default: Array(repeating: MinuteBucket(), count: 1440)][entry.minute]
                 .add(input: entry.input, output: entry.output,
-                     cacheCreation: entry.cacheCreation, cacheRead: entry.cacheRead)
+                     cacheCreation: entry.cacheCreation, cacheRead: entry.cacheRead, model: entry.model)
         }
         return DayBucket.recentDays(byDay, now: now, count: lastDays)
     }

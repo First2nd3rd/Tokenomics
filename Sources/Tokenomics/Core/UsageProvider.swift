@@ -20,12 +20,12 @@ protocol UsageProvider {
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void)
     /// Per-minute token counts (split by type) for today + the `lastDays` prior days
     /// (day → [1440]), for the intraday rate chart and the cumulative curve.
-    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [TokenCounts]]) -> Void)
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void)
 }
 
 extension UsageProvider {
     /// Providers without intraday support contribute an empty matrix.
-    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [TokenCounts]]) -> Void) {
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void) {
         completion([:])
     }
 }

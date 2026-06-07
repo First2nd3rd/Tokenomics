@@ -71,13 +71,13 @@ enum DumpIntraday {
         let provider = CombinedProvider([ClaudeNativeProvider(), CodexProvider()])
         let now = Date()
         let matrix = waitFor { provider.fetchDayMinuteMatrix(now: now, lastDays: 0, completion: $0) }
-        let minutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: TokenCounts(), count: 1440)
+        let minutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: MinuteBucket(), count: 1440)
 
         var out = ""
         var total = 0
         var start = 0
         while start < 1440 {
-            let sum = minutes[start..<min(start + 5, 1440)].reduce(0) { $0 + $1.total }
+            let sum = minutes[start..<min(start + 5, 1440)].reduce(0) { $0 + $1.counts.total }
             total += sum
             if sum > 0 { out += String(format: "%02d:%02d\t%d\n", start / 60, start % 60, sum) }
             start += 5

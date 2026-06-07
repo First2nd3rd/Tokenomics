@@ -32,10 +32,10 @@ final class CombinedProvider: UsageProvider {
         }
     }
 
-    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [TokenCounts]]) -> Void) {
+    func fetchDayMinuteMatrix(now: Date, lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void) {
         let group = DispatchGroup()
         let lock = NSLock()
-        var merged: [String: [TokenCounts]] = [:]
+        var merged: [String: [MinuteBucket]] = [:]
 
         for provider in providers {
             group.enter()

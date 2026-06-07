@@ -24,7 +24,7 @@ final class UsageStore {
     }
 
     /// Day→minute matrix (today + recent days), delivered on the main queue.
-    func refreshMatrix(now: Date = Date(), lastDays: Int, completion: @escaping ([String: [TokenCounts]]) -> Void) {
+    func refreshMatrix(now: Date = Date(), lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void) {
         provider.fetchDayMinuteMatrix(now: now, lastDays: lastDays) { matrix in
             DispatchQueue.main.async { completion(matrix) }
         }

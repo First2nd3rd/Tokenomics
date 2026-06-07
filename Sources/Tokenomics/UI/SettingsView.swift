@@ -3,12 +3,13 @@ import ServiceManagement
 
 /// How the intraday rate chart is drawn. Persisted via @AppStorage.
 enum RateChartStyle: String, CaseIterable, Identifiable {
-    case line, stacked
+    case line, stacked, model
     var id: String { rawValue }
     var label: String {
         switch self {
         case .line: return "Line"
         case .stacked: return "Stacked by type"
+        case .model: return "Stacked by model"
         }
     }
 }
