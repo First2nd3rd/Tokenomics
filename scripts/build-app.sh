@@ -22,6 +22,7 @@ cd "$ROOT_DIR"
 RELEASE_BIN=".build/release/${APP_NAME}"
 APP_DIR="dist/${APP_NAME}.app"
 CONTENTS="${APP_DIR}/Contents"
+ICON_SRC="Resources/${APP_NAME}.icns"
 
 echo "▸ Compiling release binary…"
 swift build -c release
@@ -30,6 +31,12 @@ echo "▸ Assembling ${APP_DIR}…"
 rm -rf "${APP_DIR}"
 mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
 cp "${RELEASE_BIN}" "${CONTENTS}/MacOS/${APP_NAME}"
+
+if [[ -f "${ICON_SRC}" ]]; then
+    cp "${ICON_SRC}" "${CONTENTS}/Resources/${APP_NAME}.icns"
+else
+    echo "  (no ${ICON_SRC}; app will use the default icon)"
+fi
 
 cat > "${CONTENTS}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -40,6 +47,8 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key>     <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>      <string>${BUNDLE_ID}</string>
     <key>CFBundleExecutable</key>      <string>${APP_NAME}</string>
+    <key>CFBundleIconFile</key>        <string>${APP_NAME}</string>
+    <key>CFBundleIconName</key>        <string>${APP_NAME}</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
     <key>CFBundleVersion</key>         <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>

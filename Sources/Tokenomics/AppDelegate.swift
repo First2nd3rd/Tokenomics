@@ -41,16 +41,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         if let button = statusItem.button {
-            button.title = "🪙 …"
+            button.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            button.imagePosition = .imageLeading
+            button.title = " …"
             button.target = self
             button.action = #selector(statusClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
+        applyMenuBarIcon()
+
+        // Re-render the menu-bar icon immediately when its Settings picker changes.
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.applyMenuBarIcon() }
 
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+    }
+
+    /// Set the status-item image from the chosen style (only when it changed).
+    private var appliedIconStyle: MenuBarIcon?
+    private func applyMenuBarIcon() {
+        let style = MenuBarIcon(rawValue: UserDefaults.standard.string(forKey: "menuBarIcon") ?? "") ?? .solid
+        guard style != appliedIconStyle else { return }
+        appliedIconStyle = style
+        statusItem.button?.image = style.image()
     }
 
     // MARK: - Refresh
@@ -90,12 +107,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let series = IntradayCurve.build(matrix: matrix, now: now)
 
         // Headline.
-        if let headline = dashboard.headline {
-            statusItem.button?.title = "🪙 " + Format.tokensShort(headline.totalTokens)
+        statusItem.button?.title = Self.statusTitle(dashboard, series: series)
+        if dashboard.headline != nil {
             model.headline = Self.headlineText(dashboard)
             model.subtitle = Self.subtitleText(dashboard, series: series)
         } else {
-            statusItem.button?.title = "🪙 —"
             model.headline = "—"
             model.subtitle = "usage data unavailable"
         }
@@ -119,9 +135,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.dailyBars = Array(snapshot.days.suffix(Self.dailyBarDays))
     }
 
+    /// Menu-bar text: today's tokens (monospaced digits) + a trend arrow when
+    /// today is projected above (▲) / below (▼) the 7-day average — matching the
+    /// popover's `vs 7d`. Leading space separates it from the cube image.
+    private static func statusTitle(_ d: Dashboard, series: IntradayCurve.Series) -> String {
+        guard let h = d.headline else { return " —" }
+        var title = " " + Format.tokensShort(h.totalTokens)
+        if d.isToday, let projected = series.projectedTotal, let avg = d.avgTokens, avg > 0 {
+            title += projected >= avg ? " ▲" : " ▼"
+        }
+        return title
+    }
+
     private static func headlineText(_ d: Dashboard) -> String {
         guard let h = d.headline else { return "—" }
-        return "🪙 \(Format.tokensShort(h.totalTokens)) · \(Format.cost(h.totalCost))"
+        return "\(Format.tokensShort(h.totalTokens)) · \(Format.cost(h.totalCost))"
     }
 
     /// Subtitle projection comes from the cumulative curve (`series.projectedTotal`),
@@ -204,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 380, height: 392),
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 440),
                 styleMask: [.titled, .closable],
                 backing: .buffered, defer: false
             )

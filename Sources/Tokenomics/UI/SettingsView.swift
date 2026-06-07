@@ -41,6 +41,7 @@ final class LoginItemModel: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var login: LoginItemModel
     @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
+    @AppStorage("menuBarIcon") private var menuBarIcon: MenuBarIcon = .solid
     @AppStorage(CostBasisStore.claudePlanKey) private var claudePlan: ClaudePlan = .api
     @AppStorage(CostBasisStore.gptPlanKey) private var gptPlan: GPTPlan = .api
     @AppStorage(CostBasisStore.claudeCustomKey) private var claudeCustomFee: Double = 100
@@ -70,6 +71,17 @@ struct SettingsView: View {
                 .fixedSize()
             }
 
+            row("Menu bar icon",
+                subtitle: "The cube mark shown in the menu bar.") {
+                Picker("", selection: $menuBarIcon) {
+                    ForEach(MenuBarIcon.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .fixedSize()
+            }
+
             Divider().padding(.vertical, 2)
             Text("Subscription — for break-even")
                 .font(.system(size: 12, weight: .semibold))
@@ -90,7 +102,7 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 380, height: 392, alignment: .topLeading)
+        .frame(width: 380, height: 440, alignment: .topLeading)
         .onAppear { login.refresh() }
     }
 
