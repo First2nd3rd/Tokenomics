@@ -20,7 +20,7 @@ final class CodexProvider: UsageProvider {
     let id = "codex"
 
     /// Per-file parse cache with NDJSON persistence. "v1" is the format version.
-    private let cache = FileRecordCache<CodexRecord>(diskFileName: "codex-records-v1.ndjson",
+    private let cache = FileRecordCache<CodexRecord>(diskFileName: "codex-records-v2.ndjson",
                                                      queueLabel: "tokenomics.codex-reader")
 
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
@@ -44,7 +44,7 @@ final class CodexProvider: UsageProvider {
     private func readDaily() -> [DailyUsage] {
         var byDay: [String: CodexDay] = [:]
         for r in cachedRecords() {
-            byDay[r.day, default: CodexDay()].add(input: r.input, output: r.output,
+            byDay[DayBucket.day(epoch: r.epoch), default: CodexDay()].add(input: r.input, output: r.output,
                                                   cacheRead: r.cacheRead, model: r.model)
         }
         return byDay
@@ -56,7 +56,8 @@ final class CodexProvider: UsageProvider {
     private func dayMinuteMatrix() -> [String: [MinuteBucket]] {
         var byDay: [String: [MinuteBucket]] = [:]
         for r in cachedRecords() {
-            byDay[r.day, default: Array(repeating: MinuteBucket(), count: 1440)][r.minute]
+            let (day, minute) = DayBucket.dayMinute(epoch: r.epoch)
+            byDay[day, default: Array(repeating: MinuteBucket(), count: 1440)][minute]
                 .add(input: r.input, output: r.output, cacheCreation: 0, cacheRead: r.cacheRead, model: r.model)
         }
         return byDay
@@ -83,7 +84,7 @@ final class CodexProvider: UsageProvider {
                   line.payload?.type == "token_count",
                   let usage = line.payload?.info?.total_token_usage,
                   let timestamp = line.timestamp,
-                  let dm = DayBucket.localDayMinute(from: timestamp)
+                  let date = DayBucket.date(from: timestamp)
             else { return }
 
             let cached = usage.cached_input_tokens ?? 0
@@ -96,8 +97,7 @@ final class CodexProvider: UsageProvider {
             prevOutput = usage.output_tokens
 
             records.append(CodexRecord(
-                day: dm.day,
-                minute: dm.minute,
+                epoch: Int(date.timeIntervalSince1970),
                 input: max(0, deltaInput - deltaCached),
                 output: deltaOutput,
                 cacheRead: deltaCached,
@@ -130,18 +130,18 @@ final class CodexProvider: UsageProvider {
 // MARK: - Cached record
 
 /// One Codex token_count event's contribution, already reduced to per-event
-/// deltas and mapped to the normalized token types. Short coding keys keep the
-/// persisted cache compact.
+/// deltas and mapped to the normalized token types. Tagged with its absolute UTC
+/// instant; the local day / minute is derived at read time. Short coding keys keep
+/// the persisted cache compact.
 private struct CodexRecord: Codable {
-    let day: String
-    let minute: Int          // local minute-of-day, 0…1439
+    let epoch: Int           // UTC seconds since 1970
     let input: Int           // non-cached input
     let output: Int
     let cacheRead: Int
     let model: String?
 
     enum CodingKeys: String, CodingKey {
-        case day = "d", minute = "n", input = "i", output = "o", cacheRead = "r", model = "m"
+        case epoch = "ts", input = "i", output = "o", cacheRead = "r", model = "m"
     }
 }
 

@@ -21,7 +21,7 @@ final class ClaudeNativeProvider: UsageProvider {
 
     /// Per-file parse cache (mtime+size keyed) with NDJSON persistence. The "v1" in
     /// the filename is the format version — bump it if `Record`/parsing semantics change.
-    private let cache = FileRecordCache<Record>(diskFileName: "records-v1.ndjson",
+    private let cache = FileRecordCache<Record>(diskFileName: "records-v2.ndjson",
                                                 queueLabel: "tokenomics.claude-reader")
 
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
@@ -41,7 +41,8 @@ final class ClaudeNativeProvider: UsageProvider {
     private func dayMinuteMatrix() -> [String: [MinuteBucket]] {
         var byDay: [String: [MinuteBucket]] = [:]
         for entry in Self.dedupe(cachedRecords()) {
-            byDay[entry.day, default: Array(repeating: MinuteBucket(), count: 1440)][entry.minute]
+            let (day, minute) = DayBucket.dayMinute(epoch: entry.epoch)
+            byDay[day, default: Array(repeating: MinuteBucket(), count: 1440)][minute]
                 .add(input: entry.input, output: entry.output,
                      cacheCreation: entry.cacheCreation, cacheRead: entry.cacheRead, model: entry.model)
         }
@@ -62,7 +63,7 @@ final class ClaudeNativeProvider: UsageProvider {
     private func readDaily() -> [DailyUsage] {
         var byDay: [String: DayAccumulator] = [:]
         for entry in Self.dedupe(cachedRecords()) {
-            byDay[entry.day, default: DayAccumulator()].add(entry)
+            byDay[DayBucket.day(epoch: entry.epoch), default: DayAccumulator()].add(entry)
         }
         return byDay
             .map { $0.value.makeDailyUsage(date: $0.key) }
@@ -83,7 +84,7 @@ final class ClaudeNativeProvider: UsageProvider {
                   let input = usage.input_tokens,
                   let output = usage.output_tokens,
                   let timestamp = line.timestamp,
-                  let dm = DayBucket.localDayMinute(from: timestamp)
+                  let date = DayBucket.date(from: timestamp)
             else { return }
 
             // ccusage tags "fast" (priority-tier) turns by appending "-fast" to the
@@ -92,8 +93,7 @@ final class ClaudeNativeProvider: UsageProvider {
             if usage.speed == "fast", let base = model { model = base + "-fast" }
 
             let entry = Entry(
-                day: dm.day,
-                minute: dm.minute,
+                epoch: Int(date.timeIntervalSince1970),
                 input: input,
                 output: output,
                 cacheCreation: usage.cache_creation_input_tokens ?? 0,
@@ -184,11 +184,11 @@ final class ClaudeNativeProvider: UsageProvider {
 
 // MARK: - Per-day accumulation
 
-/// A single message's usage, tagged with its local day. Short coding keys keep
-/// the persisted cache compact.
+/// A single message's usage, tagged with its absolute UTC instant. The local day /
+/// minute is derived at read time, so the cache survives a timezone change. Short
+/// coding keys keep the persisted cache compact.
 private struct Entry: Codable {
-    let day: String
-    let minute: Int          // local minute-of-day, 0…1439
+    let epoch: Int           // UTC seconds since 1970
     let input: Int
     let output: Int
     let cacheCreation: Int
@@ -196,7 +196,7 @@ private struct Entry: Codable {
     let model: String?
 
     enum CodingKeys: String, CodingKey {
-        case day = "d", minute = "n", input = "i", output = "o"
+        case epoch = "ts", input = "i", output = "o"
         case cacheCreation = "w", cacheRead = "r", model = "m"
     }
 }

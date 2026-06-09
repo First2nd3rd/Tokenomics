@@ -1,7 +1,9 @@
 import Foundation
 
-/// Converts a UTC ISO-8601 timestamp to a local "yyyy-MM-dd" day key — the same
-/// local-timezone bucketing ccusage uses. Shared by every provider.
+/// Time bucketing shared by every provider. Records are stored against their
+/// absolute UTC instant; the local calendar day / minute is computed at READ time
+/// under the current timezone, so a timezone change re-buckets correctly instead
+/// of leaving stale, baked-in day labels in the cache.
 enum DayBucket {
     private static let isoFractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -15,35 +17,29 @@ enum DayBucket {
         return f
     }()
 
-    private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
-    static func localDay(from timestamp: String) -> String? {
-        guard let date = parse(timestamp) else { return nil }
-        return dayFormatter.string(from: date)
+    /// Parse a UTC ISO-8601 timestamp to its absolute instant (timezone-independent).
+    static func date(from timestamp: String) -> Date? {
+        isoFractional.date(from: timestamp) ?? isoPlain.date(from: timestamp)
     }
 
-    /// Local calendar-day key like "2026-06-03", matching ccusage's `period`.
+    /// Local calendar-day key like "2026-06-03" for a `Date`, matching ccusage's `period`.
     static func dayKey(_ date: Date, calendar: Calendar = .current) -> String {
         let c = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
-    /// Local day key plus minute-of-day (0…1439) for intraday bucketing.
-    static func localDayMinute(from timestamp: String) -> (day: String, minute: Int)? {
-        guard let date = parse(timestamp) else { return nil }
-        let c = Calendar.current.dateComponents([.hour, .minute], from: date)
-        let minute = (c.hour ?? 0) * 60 + (c.minute ?? 0)
-        return (dayFormatter.string(from: date), minute)
+    /// Local day key for a UTC epoch (seconds), under `calendar`'s timezone.
+    static func day(epoch: Int, calendar: Calendar = .current) -> String {
+        dayKey(Date(timeIntervalSince1970: TimeInterval(epoch)), calendar: calendar)
     }
 
-    private static func parse(_ timestamp: String) -> Date? {
-        isoFractional.date(from: timestamp) ?? isoPlain.date(from: timestamp)
+    /// Local day key + minute-of-day (0…1439) for a UTC epoch, under `calendar`.
+    /// Computed fresh each call so it tracks the current timezone.
+    static func dayMinute(epoch: Int, calendar: Calendar = .current) -> (day: String, minute: Int) {
+        let date = Date(timeIntervalSince1970: TimeInterval(epoch))
+        let c = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let day = String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+        return (day, (c.hour ?? 0) * 60 + (c.minute ?? 0))
     }
 
     /// Keep today plus the `count` most recent prior days from a day-keyed matrix.

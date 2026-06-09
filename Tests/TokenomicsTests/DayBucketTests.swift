@@ -2,9 +2,10 @@ import Testing
 import Foundation
 @testable import Tokenomics
 
-// NOTE: DayBucket.localDay(_:) and DayBucket.localDayMinute(_:) format using the
-// machine's current timezone (`.current` / `dayFormatter.timeZone = .current`),
-// so they are not unit-tested deterministically here.
+// NOTE: dayMinute(epoch:)/day(epoch:) default to Calendar.current (machine
+// timezone); the calendar is injected here so the bucketing is tested
+// deterministically — including the timezone-shift regression that motivated
+// storing UTC in the cache instead of a baked local day.
 //
 // NOTE on recentDays: it calls `dayKey(now)` internally WITHOUT a calendar
 // parameter, so "today" is derived with `Calendar.current` (machine timezone).
@@ -31,6 +32,49 @@ struct DayBucketTests {
             calendar: cal, timeZone: TimeZone(identifier: "UTC")!,
             year: year, month: month, day: day, hour: 12, minute: 0
         ).date!
+    }
+
+    private static func calendar(offsetHours: Int) -> Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: offsetHours * 3600)!
+        return cal
+    }
+
+    // MARK: - dayMinute(epoch:) / day(epoch:) — timezone-aware bucketing
+
+    @Test("dayMinute derives the local day and minute under the given timezone")
+    func dayMinuteUnderTimezone() {
+        // 2026-06-07 16:30 UTC.
+        let epoch = Int(Self.noonUTC(year: 2026, month: 6, day: 7).timeIntervalSince1970) + (4 * 3600 + 30 * 60)
+
+        let utc = DayBucket.dayMinute(epoch: epoch, calendar: Self.calendar(offsetHours: 0))
+        #expect(utc.day == "2026-06-07")
+        #expect(utc.minute == 16 * 60 + 30)            // 16:30 UTC
+
+        let shanghai = DayBucket.dayMinute(epoch: epoch, calendar: Self.calendar(offsetHours: 8))
+        #expect(shanghai.day == "2026-06-08")          // +8h crosses midnight → next day
+        #expect(shanghai.minute == 0 * 60 + 30)        // 00:30 local
+    }
+
+    @Test("the same UTC instant buckets to different days as the timezone shifts (cache regression)")
+    func timezoneShiftRebuckets() {
+        // 2026-06-07 23:30 UTC — near midnight, so a westward offset stays on the 7th
+        // and an eastward offset rolls to the 8th. This is exactly the case that broke
+        // when the cache baked the local day instead of storing UTC.
+        let epoch = Int(Self.noonUTC(year: 2026, month: 6, day: 7).timeIntervalSince1970) + (11 * 3600 + 30 * 60)
+
+        #expect(DayBucket.day(epoch: epoch, calendar: Self.calendar(offsetHours: -1)) == "2026-06-07")
+        #expect(DayBucket.day(epoch: epoch, calendar: Self.calendar(offsetHours: 0))  == "2026-06-07")
+        #expect(DayBucket.day(epoch: epoch, calendar: Self.calendar(offsetHours: 1))  == "2026-06-08")
+    }
+
+    @Test("day(epoch:) agrees with dayMinute(epoch:) on the day component")
+    func dayMatchesDayMinute() {
+        let epoch = 1_781_019_000
+        for off in [-8, 0, 8] {
+            let cal = Self.calendar(offsetHours: off)
+            #expect(DayBucket.day(epoch: epoch, calendar: cal) == DayBucket.dayMinute(epoch: epoch, calendar: cal).day)
+        }
     }
 
     // MARK: - dayKey(_:calendar:)
