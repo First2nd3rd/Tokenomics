@@ -59,6 +59,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+
+        // The 60s timer is paused while the Mac sleeps, so the figure goes stale until
+        // the next tick after wake (and the day may have rolled over). Refresh
+        // immediately on wake instead of waiting.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.refresh() }
+
+        // A long-running process caches the system timezone; on a change (e.g. travel)
+        // reset it so day bucketing follows the new zone, then refresh.
+        NotificationCenter.default.addObserver(
+            forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            NSTimeZone.resetSystemTimeZone()
+            self?.refresh()
+        }
     }
 
     /// Set the status-item image from the chosen style (only when it changed).
