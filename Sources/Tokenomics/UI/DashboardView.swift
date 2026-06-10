@@ -10,6 +10,9 @@ struct DashboardView: View {
     var onQuit: () -> Void
 
     @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
+    /// Which page of the rate-chart deck is showing (0 = full day, 1 = live last hour).
+    @AppStorage("rateChartPage") private var ratePage = 0
+    private static let ratePageCount = 2
     /// Which page of the second-chart deck is showing (0 = cumulative, 1 = daily bars).
     @AppStorage("secondChartPage") private var deckPage = 0
     private static let deckPageCount = 2
@@ -17,7 +20,7 @@ struct DashboardView: View {
     /// End the x-axis at "now" (the last bucket's position), so there's no empty
     /// tail and the right edge advances each refresh.
     private var rateUpperBound: Double {
-        guard let now = model.rate5min.last?.hour else { return 1 }
+        guard let now = model.rate5min.last?.x else { return 1 }
         return min(24, max(0.5, now + 0.04))
     }
 
@@ -35,8 +38,9 @@ struct DashboardView: View {
 
             sectionLabel(rateTitle)
             rateChart
-            if rateStyle == .stacked { rateLegend }
-            else if rateStyle == .model { modelLegend }
+                .contentShape(Rectangle())
+                .onTapGesture { ratePage = (ratePage + 1) % Self.ratePageCount }
+            rateFooter
 
             sectionLabel(deckTitle)
             deckChart
@@ -88,22 +92,64 @@ struct DashboardView: View {
     ]
 
     private var rateTitle: String {
-        model.models.isEmpty ? "Today · tokens / 5 min"
-                             : "Today · " + model.models.joined(separator: ", ")
+        if ratePage == 1 { return "Live · last hour · tokens / min" }
+        return model.models.isEmpty ? "Today · tokens / 5 min"
+                                    : "Today · " + model.models.joined(separator: ", ")
+    }
+
+    /// X-scale + labeled marks for one page of the rate deck.
+    private struct RateAxis {
+        let domain: ClosedRange<Double>
+        let marks: [Double]
+        let label: (Double) -> String
+    }
+
+    private var dayAxis: RateAxis {
+        RateAxis(domain: 0...rateUpperBound,
+                 marks: [0, 3, 6, 9, 12, 15, 18, 21, 24],
+                 label: { "\(Int($0))" })
+    }
+
+    /// Minutes-ago axis: the series spans −(n−1)…0, so the newest bucket hugs the
+    /// right edge and the whole chart drifts left as time passes.
+    private var liveAxis: RateAxis {
+        RateAxis(domain: -Double(max(model.rateLive.count, 2) - 1)...0,
+                 marks: [-60, -45, -30, -15, 0],
+                 label: { $0 == 0 ? "now" : "\(Int($0))m" })
     }
 
     @ViewBuilder private var rateChart: some View {
+        let points = ratePage == 1 ? model.rateLive : model.rate5min
+        let axis = ratePage == 1 ? liveAxis : dayAxis
         switch rateStyle {
-        case .line:    lineRateChart
-        case .stacked: stackedRateChart
-        case .model:   modelRateChart
+        case .line:    lineRateChart(points, axis)
+        case .stacked: stackedRateChart(points, axis)
+        case .model:   modelRateChart(points, axis)
+        }
+    }
+
+    /// Style legend (when the style has one) + the rate deck's page dots.
+    private var rateFooter: some View {
+        HStack(spacing: 8) {
+            if rateStyle == .stacked { rateLegend }
+            else if rateStyle == .model { modelLegend }
+            Spacer(minLength: 0)
+            pageDots(current: ratePage, count: Self.ratePageCount) { ratePage = $0 }
+        }
+        .frame(width: 380)
+    }
+
+    private func rateXAxis(_ axis: RateAxis) -> some AxisContent {
+        AxisMarks(values: axis.marks) { value in
+            AxisGridLine()
+            AxisValueLabel { if let v = value.as(Double.self) { Text(axis.label(v)) } }
         }
     }
 
     /// Default: a single accent line over a faint area fill (the total per bucket).
-    private var lineRateChart: some View {
-        Chart(model.rate5min) { point in
-            AreaMark(x: .value("Time", point.hour), y: .value("Tokens", point.total))
+    private func lineRateChart(_ points: [RatePoint], _ axis: RateAxis) -> some View {
+        Chart(points) { point in
+            AreaMark(x: .value("Time", point.x), y: .value("Tokens", point.total))
                 .interpolationMethod(.monotone)
                 .foregroundStyle(
                     .linearGradient(
@@ -111,30 +157,30 @@ struct DashboardView: View {
                         startPoint: .top, endPoint: .bottom
                     )
                 )
-            LineMark(x: .value("Time", point.hour), y: .value("Tokens", point.total))
+            LineMark(x: .value("Time", point.x), y: .value("Tokens", point.total))
                 .interpolationMethod(.monotone)
                 .foregroundStyle(Color.accentColor)
                 .lineStyle(StrokeStyle(lineWidth: 1.5))
         }
-        .chartXScale(domain: 0...rateUpperBound)
-        .chartXAxis { hourAxis }
+        .chartXScale(domain: axis.domain)
+        .chartXAxis { rateXAxis(axis) }
         .chartYAxis { tokenAxis }
         .frame(width: 380, height: 84)
     }
 
     /// Optional: a smooth area stacked by token type (cache-read usually dominates).
-    private var stackedRateChart: some View {
-        Chart(model.rate5min) { point in
+    private func stackedRateChart(_ points: [RatePoint], _ axis: RateAxis) -> some View {
+        Chart(points) { point in
             ForEach(Self.bands, id: \.name) { band in
-                AreaMark(x: .value("Time", point.hour), y: .value("Tokens", band.value(point.counts)))
+                AreaMark(x: .value("Time", point.x), y: .value("Tokens", band.value(point.counts)))
                     .foregroundStyle(by: .value("Type", band.name))
                     .interpolationMethod(.monotone)
             }
         }
         .chartForegroundStyleScale(domain: Self.bands.map(\.name), range: Self.bands.map(\.color))
         .chartLegend(.hidden)
-        .chartXScale(domain: 0...rateUpperBound)
-        .chartXAxis { hourAxis }
+        .chartXScale(domain: axis.domain)
+        .chartXAxis { rateXAxis(axis) }
         .chartYAxis { tokenAxis }
         .frame(width: 380, height: 84)
     }
@@ -156,11 +202,11 @@ struct DashboardView: View {
 
     private var modelColorOrder: [ModelColors.Entry] { ModelColors.assign(model.models) }
 
-    private var modelRateChart: some View {
+    private func modelRateChart(_ points: [RatePoint], _ axis: RateAxis) -> some View {
         let order = modelColorOrder
-        return Chart(model.rate5min) { point in
+        return Chart(points) { point in
             ForEach(order) { entry in
-                AreaMark(x: .value("Time", point.hour),
+                AreaMark(x: .value("Time", point.x),
                          y: .value("Tokens", point.byModel[entry.model] ?? 0))
                     .foregroundStyle(by: .value("Model", entry.model))
                     .interpolationMethod(.monotone)
@@ -168,8 +214,8 @@ struct DashboardView: View {
         }
         .chartForegroundStyleScale(domain: order.map(\.model), range: order.map(\.color))
         .chartLegend(.hidden)
-        .chartXScale(domain: 0...rateUpperBound)
-        .chartXAxis { hourAxis }
+        .chartXScale(domain: axis.domain)
+        .chartXAxis { rateXAxis(axis) }
         .chartYAxis { tokenAxis }
         .frame(width: 380, height: 84)
     }
@@ -203,16 +249,21 @@ struct DashboardView: View {
         HStack(spacing: 8) {
             if deckPage == 1 { rateLegend }
             Spacer(minLength: 0)
-            HStack(spacing: 5) {
-                ForEach(0..<Self.deckPageCount, id: \.self) { page in
-                    Circle()
-                        .fill(page == deckPage ? Color.primary.opacity(0.6) : Color.secondary.opacity(0.25))
-                        .frame(width: 6, height: 6)
-                        .onTapGesture { deckPage = page }
-                }
-            }
+            pageDots(current: deckPage, count: Self.deckPageCount) { deckPage = $0 }
         }
         .frame(width: 380)
+    }
+
+    /// Click a dot to jump to that page (shared by both chart decks).
+    private func pageDots(current: Int, count: Int, select: @escaping (Int) -> Void) -> some View {
+        HStack(spacing: 5) {
+            ForEach(0..<count, id: \.self) { page in
+                Circle()
+                    .fill(page == current ? Color.primary.opacity(0.6) : Color.secondary.opacity(0.25))
+                    .frame(width: 6, height: 6)
+                    .onTapGesture { select(page) }
+            }
+        }
     }
 
     // MARK: - Daily bar chart (stacked by token type)
@@ -343,13 +394,6 @@ struct DashboardView: View {
     }
 
     // MARK: - Shared axes
-
-    private var hourAxis: some AxisContent {
-        AxisMarks(values: [0, 3, 6, 9, 12, 15, 18, 21, 24]) { value in
-            AxisGridLine()
-            AxisValueLabel { if let h = value.as(Double.self) { Text("\(Int(h))") } }
-        }
-    }
 
     private var tokenAxis: some AxisContent {
         AxisMarks { value in

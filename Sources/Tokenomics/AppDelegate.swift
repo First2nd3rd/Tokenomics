@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let matrixDays = 14
     /// How many recent days the daily stacked-bar chart shows.
     private static let dailyBarDays = 14
+    /// Length of the live sliding rate window. At a 60s refresh the chart shifts by
+    /// 1/60 of its width per tick — a slow, steady leftward drift.
+    private static let liveWindowMinutes = 60
 
     private var statusItem: NSStatusItem!
     private let store = UsageStore()
@@ -138,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let nowMinute = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
         let todayMinutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: MinuteBucket(), count: 1440)
         model.updateRate(today: todayMinutes, nowMinute: nowMinute)
+        model.updateLive(window: RateWindow.lastMinutes(matrix: matrix, now: now, count: Self.liveWindowMinutes))
         model.cumToday = series.today
         model.cumTypical = series.typical
         model.cumPredicted = series.predicted

@@ -1,10 +1,12 @@
 import Foundation
 import Combine
 
-/// One 5-minute bucket of the intraday rate chart: counts by type + per-model totals.
+/// One bucket of a rate chart: counts by type + per-model totals. `x` is in the
+/// owning chart's unit — hours-of-day for the full-day chart, minutes-ago
+/// (negative → 0 = now) for the live sliding window.
 struct RatePoint: Identifiable {
-    let id: Int          // bucket start minute (0,5,10,…)
-    let hour: Double     // x position in hours
+    let id: Int
+    let x: Double
     let counts: TokenCounts
     let byModel: [String: Int]
 
@@ -18,6 +20,9 @@ final class DashboardModel: ObservableObject {
     @Published var subtitle: String = ""
     @Published var models: [String] = []
     @Published var rate5min: [RatePoint] = []
+    /// The last hour at 1-minute resolution; the whole series shifts left each
+    /// refresh (x = minutes ago, −59…0).
+    @Published var rateLive: [RatePoint] = []
 
     // Cumulative chart lines.
     @Published var cumToday: [CumPoint] = []
@@ -46,10 +51,19 @@ final class DashboardModel: ObservableObject {
             var agg = MinuteBucket()
             for m in start..<end { agg.add(today[m]) }   // future minutes are empty ⇒ partial bucket
             let atMinute = (start + Self.bucketMinutes > cap) ? cap : start
-            points.append(RatePoint(id: start, hour: Double(atMinute) / 60.0,
+            points.append(RatePoint(id: start, x: Double(atMinute) / 60.0,
                                     counts: agg.counts, byModel: agg.byModel))
             start += Self.bucketMinutes
         }
         rate5min = points
+    }
+
+    /// Map the sliding window (oldest → now) onto minutes-ago positions, so the
+    /// newest bucket sits at 0 and everything drifts left as time passes.
+    func updateLive(window: [MinuteBucket]) {
+        let n = window.count
+        rateLive = window.enumerated().map { i, bucket in
+            RatePoint(id: i, x: Double(i - (n - 1)), counts: bucket.counts, byModel: bucket.byModel)
+        }
     }
 }
