@@ -36,6 +36,8 @@ enum Pricing {
     /// floor for models not present in fetched data. PricingStore overlays the live
     /// LiteLLM table on top of this.
     static let bundledSnapshot: [String: ModelPricing] = [
+        // Fable 5 — $10 / $50 / $12.50 / $1.00 per million tokens
+        "claude-fable-5":            ModelPricing(input: 0.00001, output: 0.00005, cacheCreation: 0.0000125, cacheRead: 0.000001),
         // Opus 4.7 / 4.8 — $5 / $25 / $6.25 / $0.50 per million tokens
         "claude-opus-4-8":           ModelPricing(input: 0.000005, output: 0.000025, cacheCreation: 0.00000625, cacheRead: 0.0000005),
         "claude-opus-4-7":           ModelPricing(input: 0.000005, output: 0.000025, cacheCreation: 0.00000625, cacheRead: 0.0000005),
