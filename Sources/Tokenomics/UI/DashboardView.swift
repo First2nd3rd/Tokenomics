@@ -10,7 +10,7 @@ struct DashboardView: View {
     var onQuit: () -> Void
 
     @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
-    /// Which page of the rate-chart deck is showing (0 = full day, 1 = live last hour).
+    /// Which page of the rate-chart deck is showing (0 = live last hour, 1 = full day).
     @AppStorage("rateChartPage") private var ratePage = 0
     private static let ratePageCount = 2
     /// Which page of the second-chart deck is showing (0 = cumulative, 1 = daily bars).
@@ -92,7 +92,7 @@ struct DashboardView: View {
     ]
 
     private var rateTitle: String {
-        if ratePage == 1 { return "Live · last hour · tokens / min" }
+        if ratePage == 0 { return "Live · last hour · tokens / min" }
         return model.models.isEmpty ? "Today · tokens / 5 min"
                                     : "Today · " + model.models.joined(separator: ", ")
     }
@@ -119,8 +119,8 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private var rateChart: some View {
-        let points = ratePage == 1 ? model.rateLive : model.rate5min
-        let axis = ratePage == 1 ? liveAxis : dayAxis
+        let points = ratePage == 0 ? model.rateLive : model.rate5min
+        let axis = ratePage == 0 ? liveAxis : dayAxis
         switch rateStyle {
         case .line:    lineRateChart(points, axis)
         case .stacked: stackedRateChart(points, axis)

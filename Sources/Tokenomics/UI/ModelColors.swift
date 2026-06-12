@@ -16,13 +16,21 @@ enum ModelColors {
         return 0.78                                                         // other — purple
     }
 
-    /// Ordered model→color, grouped by vendor (same hue, brightness descending),
-    /// which also defines the stack order and legend order.
-    static func assign(_ models: [String]) -> [Entry] {
+    /// Ordered model→color, grouped by vendor (same hue) and shaded by PRICE within
+    /// the vendor: the priciest model gets the lightest shade, descending from
+    /// there, so shade rank reads as price rank. Ties break by name (newer-looking
+    /// ids lighter); unpriced models sort to the darkest end. The order also
+    /// defines the stack order and legend order.
+    static func assign(_ models: [String],
+                       price: (String) -> Double = { PricingStore.shared.pricing(for: $0)?.input ?? 0 }) -> [Entry] {
         let groups = Dictionary(grouping: Set(models)) { hue(for: $0) }
         var entries: [Entry] = []
         for hue in groups.keys.sorted() {
-            let vendorModels = groups[hue]!.sorted()
+            let vendorModels = groups[hue]!.sorted { a, b in
+                let pa = price(a), pb = price(b)
+                if pa != pb { return pa > pb }
+                return a > b
+            }
             let count = vendorModels.count
             for (i, model) in vendorModels.enumerated() {
                 let brightness = count <= 1 ? 0.82 : 0.92 - 0.46 * (Double(i) / Double(count - 1))
