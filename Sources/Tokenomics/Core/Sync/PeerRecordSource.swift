@@ -25,6 +25,11 @@ struct PeerInfo {
 final class PeerRecordSource: UsageProvider {
     let id = "peers"
 
+    /// Ignore a peer that hasn't published within this window (a retired / long-off
+    /// Mac), so it drops out of the totals and the by-machine view instead of
+    /// lingering forever. The file itself stays in iCloud until that Mac retracts it.
+    static let staleAfter: TimeInterval = 7 * 86_400
+
     private struct CachedPeer {
         let machineId: String
         let displayName: String
@@ -58,8 +63,9 @@ final class PeerRecordSource: UsageProvider {
 
     /// Read + union all peer files (own excluded, one newest file per machine),
     /// retaining last-known records for files that are momentarily unreadable.
-    func readPeers() -> [UsageRecord] {
+    func readPeers(now: Date = Date()) -> [UsageRecord] {
         let urls = folder.peerFileURLs()
+        let staleCutoff = Int(now.timeIntervalSince1970 - Self.staleAfter)
         var present = Set<String>()
         var newestByMachine: [String: CachedPeer] = [:]
 
@@ -82,6 +88,7 @@ final class PeerRecordSource: UsageProvider {
             }
 
             if peer.machineId == ownMachineId { continue }   // our own file / its conflict copy
+            if peer.publishedAt < staleCutoff { continue }   // GC: silent > 7 days, ignore it
             // Among files claiming the same machine, keep only the newest.
             if let existing = newestByMachine[peer.machineId], existing.publishedAt >= peer.publishedAt { continue }
             newestByMachine[peer.machineId] = peer

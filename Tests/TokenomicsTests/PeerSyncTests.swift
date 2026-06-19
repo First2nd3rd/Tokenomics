@@ -29,13 +29,18 @@ private final class StubFolder: PeerFolder {
 @Suite("Peer sync")
 struct PeerSyncTests {
 
+    /// A fixed "now" for reads; peer fixtures publish just before it so the 7-day GC
+    /// doesn't drop them. Tests that exercise GC pass their own `now`.
+    private let clock = Date(timeIntervalSince1970: 1_750_000_500)
+    private var clockE: Int { Int(clock.timeIntervalSince1970) }
+
     private func rec(_ source: UsageSource, key: String?, input: Int = 0, output: Int = 0,
                      epoch: Int = 1_750_000_000, model: String? = nil) -> UsageRecord {
         UsageRecord(source: source, key: key, epoch: epoch, input: input, output: output,
                     cacheCreation: 0, cacheRead: 0, model: model)
     }
 
-    private func peerData(machineId: String, records: [UsageRecord], at: Int = 1_750_000_123) -> Data {
+    private func peerData(machineId: String, records: [UsageRecord], at: Int = 1_750_000_400) -> Data {
         PeerFile.encode(records: records, machineId: machineId, displayName: machineId,
                         appVersion: "0.1.0", publishedAt: at, windowDays: 90)
     }
@@ -48,7 +53,7 @@ struct PeerSyncTests {
         folder.files["tok-own.ndjson"] = peerData(machineId: "own", records: [rec(.claude, key: "MINE", input: 99)])
         folder.files["tok-peer.ndjson"] = peerData(machineId: "peer", records: [rec(.claude, key: "THEIRS", input: 5)])
 
-        let recs = PeerRecordSource(folder: folder, ownMachineId: "own").readPeers()
+        let recs = PeerRecordSource(folder: folder, ownMachineId: "own").readPeers(now: clock)
         #expect(recs.count == 1)
         #expect(recs.first?.machine == "peer")
         #expect(recs.first?.input == 5)
@@ -58,17 +63,17 @@ struct PeerSyncTests {
     func skipsOwnConflictCopy() {
         let folder = StubFolder()
         folder.files["tok-own 2.ndjson"] = peerData(machineId: "own", records: [rec(.claude, key: "MINE", input: 99)])
-        #expect(PeerRecordSource(folder: folder, ownMachineId: "own").readPeers().isEmpty)
+        #expect(PeerRecordSource(folder: folder, ownMachineId: "own").readPeers(now: clock).isEmpty)
     }
 
     @Test("a peer's iCloud conflict copy does not double-count its keyless records")
     func peerConflictCopyNoDoubleCount() {
         let folder = StubFolder()
         let keyless = rec(.claude, key: nil, input: 10, model: "m")   // can't be deduped by key
-        folder.files["tok-peer.ndjson"] = peerData(machineId: "peer", records: [keyless], at: 1000)
-        folder.files["tok-peer 2.ndjson"] = peerData(machineId: "peer", records: [keyless], at: 1000)  // conflict copy
+        folder.files["tok-peer.ndjson"] = peerData(machineId: "peer", records: [keyless], at: clockE - 60)
+        folder.files["tok-peer 2.ndjson"] = peerData(machineId: "peer", records: [keyless], at: clockE - 60)  // conflict copy
 
-        let recs = PeerRecordSource(folder: folder, ownMachineId: "own").readPeers()
+        let recs = PeerRecordSource(folder: folder, ownMachineId: "own").readPeers(now: clock)
         #expect(recs.count == 1)            // counted once, not twice
         #expect(recs.first?.input == 10)
     }
@@ -77,12 +82,27 @@ struct PeerSyncTests {
     func peerKeepsNewestCopy() {
         let folder = StubFolder()
         folder.files["tok-peer.ndjson"] = peerData(
-            machineId: "peer", records: [rec(.claude, key: "A", input: 1)], at: 1000)
+            machineId: "peer", records: [rec(.claude, key: "A", input: 1)], at: clockE - 120)
         folder.files["tok-peer 2.ndjson"] = peerData(
-            machineId: "peer", records: [rec(.claude, key: "A", input: 1), rec(.claude, key: "B", input: 2)], at: 2000)
+            machineId: "peer", records: [rec(.claude, key: "A", input: 1), rec(.claude, key: "B", input: 2)], at: clockE - 60)
 
-        let recs = PeerRecordSource(folder: folder, ownMachineId: "own").readPeers()
+        let recs = PeerRecordSource(folder: folder, ownMachineId: "own").readPeers(now: clock)
         #expect(recs.count == 2)            // the newer file (publishedAt 2000) wins
+    }
+
+    @Test("a peer silent for more than 7 days is dropped (GC), a recent one is kept")
+    func dropsStalePeer() {
+        let folder = StubFolder()
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let nowE = Int(now.timeIntervalSince1970)
+        folder.files["tok-fresh.ndjson"] = peerData(
+            machineId: "fresh", records: [rec(.claude, key: "F", input: 1)], at: nowE - 6 * 86_400)
+        folder.files["tok-stale.ndjson"] = peerData(
+            machineId: "stale", records: [rec(.claude, key: "S", input: 9)], at: nowE - 8 * 86_400)
+
+        let recs = PeerRecordSource(folder: folder, ownMachineId: "own").readPeers(now: now)
+        #expect(recs.count == 1)
+        #expect(recs.first?.key == "F")        // fresh kept, stale (8d) dropped
     }
 
     @Test("retains a peer's last-known records when its file is transiently unreadable")
@@ -91,9 +111,9 @@ struct PeerSyncTests {
         folder.files["tok-peer.ndjson"] = peerData(machineId: "peer", records: [rec(.claude, key: "T", input: 7)])
         let source = PeerRecordSource(folder: folder, ownMachineId: "own")
 
-        #expect(source.readPeers().first?.input == 7)        // cycle 1: read fresh
+        #expect(source.readPeers(now: clock).first?.input == 7)        // cycle 1: read fresh
         folder.unavailable.insert("tok-peer.ndjson")
-        #expect(source.readPeers().first?.input == 7)        // cycle 2: placeholder → retained
+        #expect(source.readPeers(now: clock).first?.input == 7)        // cycle 2: placeholder → retained
     }
 
     @Test("drops a peer's contribution once its file is gone")
@@ -102,9 +122,9 @@ struct PeerSyncTests {
         folder.files["tok-peer.ndjson"] = peerData(machineId: "peer", records: [rec(.claude, key: "T", input: 7)])
         let source = PeerRecordSource(folder: folder, ownMachineId: "own")
 
-        _ = source.readPeers()
+        _ = source.readPeers(now: clock)
         folder.files.removeValue(forKey: "tok-peer.ndjson")
-        #expect(source.readPeers().isEmpty)
+        #expect(source.readPeers(now: clock).isEmpty)
     }
 
     // MARK: - PeerPublisher
@@ -173,7 +193,7 @@ struct PeerSyncTests {
         #expect(pub.publishIfNeeded(localRecords: [rec(.claude, key: "A", input: 42, model: "m")], now: now) == true)
 
         // A different machine reads the folder.
-        let recs = PeerRecordSource(folder: folder, ownMachineId: "mac-B").readPeers()
+        let recs = PeerRecordSource(folder: folder, ownMachineId: "mac-B").readPeers(now: clock)
         #expect(recs.count == 1)
         #expect(recs.first?.machine == "mac-A")
         #expect(recs.first?.input == 42)
