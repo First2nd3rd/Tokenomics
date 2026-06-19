@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// Reads Claude Code usage directly from the local JSONL logs — no ccusage / Node.
 ///
@@ -19,10 +18,11 @@ final class ClaudeNativeProvider: UsageProvider {
 
     private static let usageNeedle = Data("input_tokens".utf8)
 
-    /// Per-file parse cache (mtime+size keyed) with NDJSON persistence. The "v1" in
-    /// the filename is the format version — bump it if `Record`/parsing semantics change.
-    private let cache = FileRecordCache<Record>(diskFileName: "records-v2.ndjson",
-                                                queueLabel: "tokenomics.claude-reader")
+    /// Per-file parse cache (mtime+size keyed) with NDJSON persistence. The version
+    /// in the filename is the format version — bump it if `UsageRecord` or the
+    /// parsing semantics change.
+    private let cache = FileRecordCache<UsageRecord>(diskFileName: "records-v3.ndjson",
+                                                     queueLabel: "tokenomics.claude-reader")
 
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
@@ -40,7 +40,7 @@ final class ClaudeNativeProvider: UsageProvider {
     /// The caller trims to the window it needs.
     private func dayMinuteMatrix() -> [String: [MinuteBucket]] {
         var byDay: [String: [MinuteBucket]] = [:]
-        for entry in Self.dedupe(cachedRecords()) {
+        for entry in Dedup.collapse(cachedRecords()) {
             let (day, minute) = DayBucket.dayMinute(epoch: entry.epoch)
             byDay[day, default: Array(repeating: MinuteBucket(), count: 1440)][minute]
                 .add(input: entry.input, output: entry.output,
@@ -54,7 +54,7 @@ final class ClaudeNativeProvider: UsageProvider {
     /// All parsed records (pre-dedup), re-parsing only files whose mtime/size
     /// changed; unchanged files reuse cached records, so the recurring refresh stays
     /// cheap once the first full scan is warm.
-    private func cachedRecords() -> [Record] {
+    private func cachedRecords() -> [UsageRecord] {
         let files = Self.claudeProjectRoots().flatMap { Self.jsonlFiles(under: $0) }
         return cache.records(for: files, parse: Self.parseFile)
     }
@@ -62,7 +62,7 @@ final class ClaudeNativeProvider: UsageProvider {
     /// Per-day totals (deduped).
     private func readDaily() -> [DailyUsage] {
         var byDay: [String: DayAccumulator] = [:]
-        for entry in Self.dedupe(cachedRecords()) {
+        for entry in Dedup.collapse(cachedRecords()) {
             byDay[DayBucket.day(epoch: entry.epoch), default: DayAccumulator()].add(entry)
         }
         return byDay
@@ -71,9 +71,9 @@ final class ClaudeNativeProvider: UsageProvider {
     }
 
     /// Parse one JSONL file into usage records (cross-file dedup happens later).
-    private static func parseFile(_ file: URL) -> [Record] {
+    private static func parseFile(_ file: URL) -> [UsageRecord] {
         let decoder = JSONDecoder()
-        var records: [Record] = []
+        var records: [UsageRecord] = []
 
         LineReader.forEachLine(of: file) { lineData in
             // Fast path: only assistant usage lines contain "input_tokens" — skip the
@@ -92,39 +92,25 @@ final class ClaudeNativeProvider: UsageProvider {
             var model = line.message?.model
             if usage.speed == "fast", let base = model { model = base + "-fast" }
 
-            let entry = Entry(
+            // Globally-unique, idempotent dedup key; nil when the line lacks the ids
+            // (then it can't be deduped and is always counted).
+            var key: String?
+            if let id = line.message?.id, let requestId = line.requestId {
+                key = Dedup.key(id, requestId)
+            }
+
+            records.append(UsageRecord(
+                source: .claude,
+                key: key,
                 epoch: Int(date.timeIntervalSince1970),
                 input: input,
                 output: output,
                 cacheCreation: usage.cache_creation_input_tokens ?? 0,
                 cacheRead: usage.cache_read_input_tokens ?? 0,
                 model: model
-            )
-
-            var key: String?
-            if let id = line.message?.id, let requestId = line.requestId {
-                key = hashedKey(id, requestId)
-            }
-            records.append(Record(key: key, entry: entry))
+            ))
         }
         return records
-    }
-
-    /// Cross-file dedup: one assistant turn spans several JSONL lines sharing
-    /// `message.id:requestId` with identical input/cache but a growing output; keep
-    /// the largest. Lines missing either id can't be deduped (kept individually).
-    private static func dedupe(_ records: [Record]) -> [Entry] {
-        var best: [String: Entry] = [:]
-        var keyless: [Entry] = []
-        for record in records {
-            if let key = record.key {
-                if let existing = best[key], existing.output >= record.entry.output { continue }
-                best[key] = record.entry
-            } else {
-                keyless.append(record.entry)
-            }
-        }
-        return Array(best.values) + keyless
     }
 
     // MARK: - Discovery
@@ -171,43 +157,9 @@ final class ClaudeNativeProvider: UsageProvider {
         return files
     }
 
-    // MARK: - Dedup key
-
-    /// 12-byte SHA-256 prefix of `id:requestId`, base64 — compact and
-    /// collision-free in practice (~1e-17 at a million messages).
-    private static func hashedKey(_ id: String, _ requestId: String) -> String {
-        let digest = SHA256.hash(data: Data((id + ":" + requestId).utf8))
-        return Data(digest.prefix(12)).base64EncodedString()
-    }
-
 }
 
 // MARK: - Per-day accumulation
-
-/// A single message's usage, tagged with its absolute UTC instant. The local day /
-/// minute is derived at read time, so the cache survives a timezone change. Short
-/// coding keys keep the persisted cache compact.
-private struct Entry: Codable {
-    let epoch: Int           // UTC seconds since 1970
-    let input: Int
-    let output: Int
-    let cacheCreation: Int
-    let cacheRead: Int
-    let model: String?
-
-    enum CodingKeys: String, CodingKey {
-        case epoch = "ts", input = "i", output = "o"
-        case cacheCreation = "w", cacheRead = "r", model = "m"
-    }
-}
-
-/// One usage line's contribution plus its dedup key (nil = can't be deduped).
-private struct Record: Codable {
-    let key: String?
-    let entry: Entry
-
-    enum CodingKeys: String, CodingKey { case key = "k", entry = "e" }
-}
 
 private struct DayAccumulator {
     var input = 0
@@ -217,7 +169,7 @@ private struct DayAccumulator {
     var cost = 0.0
     var models = Set<String>()
 
-    mutating func add(_ entry: Entry) {
+    mutating func add(_ entry: UsageRecord) {
         input += entry.input
         output += entry.output
         cacheCreation += entry.cacheCreation

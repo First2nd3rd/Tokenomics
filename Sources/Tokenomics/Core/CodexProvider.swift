@@ -13,14 +13,22 @@ import Foundation
 /// Cost comes from the shared price table; models without a price (e.g.
 /// `codex-auto-review`) contribute tokens but $0, matching ccusage.
 ///
+/// Each record carries a dedup key = hash(rollout-file-name : event-index). The
+/// filename holds the session UUID and is preserved by any file sync, so the same
+/// event hashes identically on every machine. Locally each event's key is unique,
+/// so `Dedup.collapse` is a no-op and daily totals are unchanged; the key only does
+/// work in the cross-machine union, where it prevents double-counting a rollout file
+/// that reached two machines (e.g. a synced `~/.codex`).
+///
 /// Deltas are computed per file, so each file's parsed records are self-contained
 /// and cacheable by (mtime, size) — identical to the Claude reader — which keeps
 /// recurring refreshes off the full-rescan path once warm.
 final class CodexProvider: UsageProvider {
     let id = "codex"
 
-    /// Per-file parse cache with NDJSON persistence. "v1" is the format version.
-    private let cache = FileRecordCache<CodexRecord>(diskFileName: "codex-records-v2.ndjson",
+    /// Per-file parse cache with NDJSON persistence; the version in the filename is
+    /// the format version.
+    private let cache = FileRecordCache<UsageRecord>(diskFileName: "codex-records-v3.ndjson",
                                                      queueLabel: "tokenomics.codex-reader")
 
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
@@ -36,14 +44,14 @@ final class CodexProvider: UsageProvider {
     }
 
     /// All parsed records, re-parsing only rollout files whose mtime/size changed.
-    private func cachedRecords() -> [CodexRecord] {
+    private func cachedRecords() -> [UsageRecord] {
         cache.records(for: Self.rolloutFiles(), parse: Self.parseFile)
     }
 
     /// Per-day totals.
     private func readDaily() -> [DailyUsage] {
         var byDay: [String: CodexDay] = [:]
-        for r in cachedRecords() {
+        for r in Dedup.collapse(cachedRecords()) {
             byDay[DayBucket.day(epoch: r.epoch), default: CodexDay()].add(input: r.input, output: r.output,
                                                   cacheRead: r.cacheRead, model: r.model)
         }
@@ -55,7 +63,7 @@ final class CodexProvider: UsageProvider {
     /// Per-minute buckets (by type + by model) for every day with data.
     private func dayMinuteMatrix() -> [String: [MinuteBucket]] {
         var byDay: [String: [MinuteBucket]] = [:]
-        for r in cachedRecords() {
+        for r in Dedup.collapse(cachedRecords()) {
             let (day, minute) = DayBucket.dayMinute(epoch: r.epoch)
             byDay[day, default: Array(repeating: MinuteBucket(), count: 1440)][minute]
                 .add(input: r.input, output: r.output, cacheCreation: 0, cacheRead: r.cacheRead, model: r.model)
@@ -66,11 +74,15 @@ final class CodexProvider: UsageProvider {
     /// Parse one rollout file into per-event delta records. Cumulative counters are
     /// tracked within the file; the model carries forward from the latest
     /// `turn_context`. Self-contained, so the result caches by (mtime, size).
-    private static func parseFile(_ file: URL) -> [CodexRecord] {
+    private static func parseFile(_ file: URL) -> [UsageRecord] {
         let decoder = JSONDecoder()
-        var records: [CodexRecord] = []
+        var records: [UsageRecord] = []
         var model: String?
         var prevInput = 0, prevCached = 0, prevOutput = 0
+        // Stable per-event identity for cross-machine dedup: the rollout file's name
+        // (carries the session UUID; preserved by file sync) + the event's ordinal.
+        let session = file.lastPathComponent
+        var index = 0
 
         LineReader.forEachLine(of: file) { lineData in
             guard let line = try? decoder.decode(CodexLine.self, from: lineData) else { return }
@@ -96,13 +108,17 @@ final class CodexProvider: UsageProvider {
             prevCached = cached
             prevOutput = usage.output_tokens
 
-            records.append(CodexRecord(
+            records.append(UsageRecord(
+                source: .codex,
+                key: Dedup.key(session, String(index)),
                 epoch: Int(date.timeIntervalSince1970),
                 input: max(0, deltaInput - deltaCached),
                 output: deltaOutput,
+                cacheCreation: 0,
                 cacheRead: deltaCached,
                 model: model
             ))
+            index += 1
         }
         return records
     }
@@ -124,24 +140,6 @@ final class CodexProvider: UsageProvider {
             files.append(url)
         }
         return files
-    }
-}
-
-// MARK: - Cached record
-
-/// One Codex token_count event's contribution, already reduced to per-event
-/// deltas and mapped to the normalized token types. Tagged with its absolute UTC
-/// instant; the local day / minute is derived at read time. Short coding keys keep
-/// the persisted cache compact.
-private struct CodexRecord: Codable {
-    let epoch: Int           // UTC seconds since 1970
-    let input: Int           // non-cached input
-    let output: Int
-    let cacheRead: Int
-    let model: String?
-
-    enum CodingKeys: String, CodingKey {
-        case epoch = "ts", input = "i", output = "o", cacheRead = "r", model = "m"
     }
 }
 
