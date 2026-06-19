@@ -64,6 +64,54 @@ enum DumpDaily {
     }
 }
 
+/// Inspects the iCloud peers folder via the real `ICloudDriveFolder` read path and
+/// prints each peer file's manifest + a structure check. Invoked with `--dump-peers`.
+/// Run from a context that has iCloud Drive access (the app's own bundle).
+enum DumpPeers {
+    static func run() {
+        let folder = ICloudDriveFolder()
+        print("this machine id: \(DeviceIdentity.id)")
+        print("display name:    \(DeviceIdentity.displayName())")
+        guard let dir = folder.directoryURL else {
+            print("iCloud Drive unavailable (directoryURL == nil) — not signed in / iCloud Drive off")
+            return
+        }
+        print("peers dir:       \(dir.path)")
+
+        let urls = folder.peerFileURLs()
+        print("found \(urls.count) *.ndjson file(s)\n")
+
+        for url in urls {
+            let name = url.lastPathComponent
+            print("===== \(name) =====")
+            guard let data = folder.readData(at: url) else {
+                print("  [unreadable — undownloaded iCloud placeholder, or TCC-blocked]\n")
+                continue
+            }
+            guard let contents = PeerFile.decode(data) else {
+                print("  [decode FAILED — \(data.count) bytes, manifest missing/unsupported]\n")
+                continue
+            }
+            let m = contents.manifest
+            let isThisMac = m.machineId == DeviceIdentity.id
+            let filenameOK = name == peerFileName(forMachine: m.machineId)
+            print("  bytes:        \(data.count)")
+            print("  schemaVersion:\(m.schemaVersion)")
+            print("  machineId:    \(m.machineId)  \(isThisMac ? "(THIS MAC — should be skipped on read)" : "(peer)")")
+            print("  displayName:  \(m.displayName)")
+            print("  appVersion:   \(m.appVersion)")
+            print("  publishedAt:  \(m.publishedAt)  (\(Date(timeIntervalSince1970: TimeInterval(m.publishedAt)))) ")
+            print("  windowDays:   \(m.windowDays)")
+            print("  recordCount:  manifest=\(m.recordCount)  actual=\(contents.records.count)  \(m.recordCount == contents.records.count ? "✓ match" : "✗ MISMATCH")")
+            print("  filename↔id:  \(filenameOK ? "✓ match" : "✗ MISMATCH")")
+            if let r = contents.records.first {
+                print("  first record: source=\(r.source.rawValue) key=\(r.key ?? "nil") ts=\(r.epoch) i=\(r.input) o=\(r.output) w=\(r.cacheCreation) r=\(r.cacheRead) model=\(r.model ?? "nil") machine=\(r.machine ?? "nil")")
+            }
+            print("")
+        }
+    }
+}
+
 /// Prints today's non-empty 5-minute token buckets (combined Claude+Codex) plus a
 /// TOTAL, to sanity-check the intraday rate chart. Invoked with `--dump-intraday`.
 enum DumpIntraday {
