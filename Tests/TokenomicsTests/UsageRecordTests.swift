@@ -115,6 +115,38 @@ struct UsageRecordTests {
         #expect(obj2["v"] as? String == "x")
     }
 
+    // MARK: - machine dimension
+
+    @Test("with(machine:) tags a copy and leaves the original untouched")
+    func withMachineTags() {
+        let r = rec(source: .codex, key: "X:0", input: 5, model: "g")
+        let tagged = r.with(machine: "peer-2")
+        #expect(r.machine == nil)
+        #expect(tagged.machine == "peer-2")
+        #expect(tagged.input == 5 && tagged.key == "X:0")   // other fields preserved
+    }
+
+    @Test("a local (nil-machine) record omits the machine key on disk")
+    func localOmitsMachineKey() throws {
+        #expect(!(try jsonKeys(of: rec(source: .claude, key: "K", model: "m"))).contains("h"))
+    }
+
+    @Test("decodes a legacy v3 line without the machine key as nil (no cache bump)")
+    func decodesLegacyWithoutMachine() throws {
+        let json = #"{"v":"c","k":"K","ts":1,"i":1,"o":2,"w":3,"r":4,"m":"opus"}"#
+        let r = try JSONDecoder().decode(UsageRecord.self, from: Data(json.utf8))
+        #expect(r.machine == nil)
+        #expect(r.source == .claude && r.model == "opus")
+    }
+
+    @Test("a peer-tagged record round-trips its machine key")
+    func peerTaggedRoundTrips() throws {
+        let r = rec(source: .claude, key: "K", model: "m").with(machine: "peer-7")
+        let back = try JSONDecoder().decode(UsageRecord.self, from: JSONEncoder().encode(r))
+        #expect(back.machine == "peer-7")
+        #expect(back == r)
+    }
+
     // MARK: - Helpers
 
     private func jsonObject(of record: UsageRecord) throws -> [String: Any] {

@@ -39,6 +39,18 @@ enum UsageAggregator {
         return out
     }
 
+    /// Per-machine daily series (machine id → days), deduped across the whole union.
+    /// A record's `nil` machine means it came from the local Mac (`localMachine`).
+    static func byMachine(_ records: [UsageRecord],
+                          localMachine: String = DeviceIdentity.id) -> [String: [DailyUsage]] {
+        let collapsed = Dedup.collapse(records)
+        var out: [String: [DailyUsage]] = [:]
+        for (machine, recs) in Dictionary(grouping: collapsed, by: { $0.machine ?? localMachine }) {
+            out[machine] = aggregateByDay(recs)
+        }
+        return out
+    }
+
     /// Day → [1440] per-minute buckets (by type + by model), deduped across the union.
     static func dayMinuteMatrix(_ records: [UsageRecord]) -> [String: [MinuteBucket]] {
         var byDay: [String: [MinuteBucket]] = [:]

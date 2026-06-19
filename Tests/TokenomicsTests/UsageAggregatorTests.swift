@@ -120,6 +120,29 @@ struct UsageAggregatorTests {
         #expect(twice.inputTokens == 10)   // not 20
     }
 
+    // MARK: - byMachine
+
+    @Test("byMachine groups local (nil) records under localMachine and peers separately")
+    func byMachineGroups() {
+        let recs = [
+            rec(source: .claude, key: "A", input: 10, model: "m"),
+            rec(source: .claude, key: "B", input: 20, model: "m").with(machine: "peer-1"),
+        ]
+        let bm = UsageAggregator.byMachine(recs, localMachine: "this-mac")
+        #expect(bm["this-mac"]?.first?.inputTokens == 10)
+        #expect(bm["peer-1"]?.first?.inputTokens == 20)
+    }
+
+    @Test("byMachine dedups an identical turn shared by local and a peer (counts once)")
+    func byMachineDedupsShared() {
+        // Same Claude turn present locally (nil) and in a peer's file.
+        let local = rec(source: .claude, key: "DUP", input: 100, output: 50, model: "m")
+        let peer = local.with(machine: "peer-1")
+        let bm = UsageAggregator.byMachine([local, peer], localMachine: "this-mac")
+        let total = bm.values.flatMap { $0 }.reduce(0) { $0 + $1.totalTokens }
+        #expect(total == 100 + 50)   // counted once across all machines, not twice
+    }
+
     // MARK: - matrix
 
     @Test("dayMinuteMatrix buckets records with a by-model split")

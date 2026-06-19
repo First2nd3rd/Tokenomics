@@ -27,12 +27,38 @@ struct UsageRecord: Codable, Equatable, Hashable {
     let cacheCreation: Int    // Codex has no cache-creation concept ⇒ always 0
     let cacheRead: Int
     let model: String?
+    /// Which machine produced this record. `nil` = the local machine (we never
+    /// persist our own id in the cache); set to a peer's id when read from a peer
+    /// file. Optional + omitted-when-nil, so existing caches decode unchanged.
+    let machine: String?
+
+    init(source: UsageSource, key: String?, epoch: Int, input: Int, output: Int,
+         cacheCreation: Int, cacheRead: Int, model: String?, machine: String? = nil) {
+        self.source = source
+        self.key = key
+        self.epoch = epoch
+        self.input = input
+        self.output = output
+        self.cacheCreation = cacheCreation
+        self.cacheRead = cacheRead
+        self.model = model
+        self.machine = machine
+    }
+
+    /// A copy tagged with `machine` — used when stamping a peer file's records with
+    /// the publisher's id at read time.
+    func with(machine: String?) -> UsageRecord {
+        UsageRecord(source: source, key: key, epoch: epoch, input: input, output: output,
+                    cacheCreation: cacheCreation, cacheRead: cacheRead, model: model, machine: machine)
+    }
 
     // Compact coding keys keep the persisted cache small. `v` (vendor) carries
-    // `source` so it can't collide with the cache wrapper's `s` (file size).
+    // `source` so it can't collide with the cache wrapper's `s` (file size); `h`
+    // (host) carries the machine and is omitted for local (nil) records.
     enum CodingKeys: String, CodingKey {
         case source = "v", key = "k", epoch = "ts",
-             input = "i", output = "o", cacheCreation = "w", cacheRead = "r", model = "m"
+             input = "i", output = "o", cacheCreation = "w", cacheRead = "r", model = "m",
+             machine = "h"
     }
 }
 
