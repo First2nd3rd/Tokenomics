@@ -15,31 +15,40 @@ struct DailyUsage {
 
 /// A source of usage data. Callback-based rather than async/await to avoid
 /// Swift-6 actor-isolation ceremony until the project adopts strict concurrency.
+///
+/// The one primitive is `fetchRecords`: the RAW, pre-dedup `UsageRecord` stream for
+/// this source. Every derived view (daily, per-vendor, intraday matrix) is computed
+/// from it through `UsageAggregator`, which runs the single global `Dedup.collapse`
+/// over the union — so combining sources (the local providers today, peer Macs
+/// later) stays correct without any source re-implementing aggregation.
 protocol UsageProvider {
     var id: String { get }
+
+    /// Raw, PRE-dedup records from this source.
+    func fetchRecords(completion: @escaping ([UsageRecord]) -> Void)
+
     func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void)
-    /// Per-vendor daily series (provider id → days). A leaf provider reports its own
-    /// id; `CombinedProvider` unions its children. The break-even view needs each
+    /// Per-vendor daily series (provider id → days). The break-even view needs each
     /// vendor's cost separately, which the merged daily series throws away.
     func fetchDailyByVendor(completion: @escaping ([String: [DailyUsage]]) -> Void)
     /// Per-minute token counts (split by type + by model) for EVERY day with data
-    /// (day → [1440]). Returning the full matrix lets the caller merge providers
-    /// first and then trim to a precise day window — trimming per provider here
-    /// would make the merged window fuzzy (each provider's "last N days" can span a
-    /// different calendar range). Drives the intraday rate chart and the curve.
+    /// (day → [1440]). Returning the full matrix lets the caller trim to a precise
+    /// day window after merging, instead of each source guessing the window.
     func fetchDayMinuteMatrix(completion: @escaping ([String: [MinuteBucket]]) -> Void)
 }
 
 extension UsageProvider {
-    /// Providers without intraday support contribute an empty matrix.
-    func fetchDayMinuteMatrix(completion: @escaping ([String: [MinuteBucket]]) -> Void) {
-        completion([:])
+    /// All three views derive from the record stream through one aggregation path,
+    /// so a conforming source only has to implement `fetchRecords`.
+    func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
+        fetchRecords { completion(.success(UsageAggregator.daily($0))) }
     }
 
-    /// A leaf provider reports its daily series under its own id.
     func fetchDailyByVendor(completion: @escaping ([String: [DailyUsage]]) -> Void) {
-        fetchDaily { result in
-            completion([id: (try? result.get()) ?? []])
-        }
+        fetchRecords { completion(UsageAggregator.byVendor($0)) }
+    }
+
+    func fetchDayMinuteMatrix(completion: @escaping ([String: [MinuteBucket]]) -> Void) {
+        fetchRecords { completion(UsageAggregator.dayMinuteMatrix($0)) }
     }
 }

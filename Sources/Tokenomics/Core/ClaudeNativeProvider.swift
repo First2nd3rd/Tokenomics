@@ -8,11 +8,13 @@ import Foundation
 ///   - globs `projects/**/*.jsonl` at ALL depths (so nested subagent/workflow logs
 ///     are included, matching ccusage)
 ///   - keeps lines carrying `message.usage` with input/output token counts
-///   - dedups by `message.id:requestId` (null key => never deduped, always counted)
-///   - buckets each line by its `timestamp` converted to the LOCAL calendar day
+///   - tags each record with a `message.id:requestId` dedup key (null => never
+///     deduped, always counted)
+///   - stores the UTC instant; the local day and cost are derived at read time by
+///     `UsageAggregator`.
 ///
-/// Cost is computed per message from the bundled `Pricing` table (same formula
-/// and LiteLLM-sourced prices as ccusage) and summed per day.
+/// This provider only PARSES; deduping and aggregation happen once, downstream, over
+/// the union of all sources.
 final class ClaudeNativeProvider: UsageProvider {
     let id = "claude-native"
 
@@ -24,51 +26,21 @@ final class ClaudeNativeProvider: UsageProvider {
     private let cache = FileRecordCache<UsageRecord>(diskFileName: "records-v3.ndjson",
                                                      queueLabel: "tokenomics.claude-reader")
 
-    func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
+    /// Raw, pre-dedup records; the union + single `Dedup.collapse` happens upstream.
+    func fetchRecords(completion: @escaping ([UsageRecord]) -> Void) {
         DispatchQueue.global(qos: .utility).async {
-            completion(.success(self.readDaily()))
+            completion(self.cachedRecords())
         }
     }
 
-    func fetchDayMinuteMatrix(completion: @escaping ([String: [MinuteBucket]]) -> Void) {
-        DispatchQueue.global(qos: .utility).async {
-            completion(self.dayMinuteMatrix())
-        }
-    }
-
-    /// Per-minute buckets (by type + by model) for every day with data (deduped).
-    /// The caller trims to the window it needs.
-    private func dayMinuteMatrix() -> [String: [MinuteBucket]] {
-        var byDay: [String: [MinuteBucket]] = [:]
-        for entry in Dedup.collapse(cachedRecords()) {
-            let (day, minute) = DayBucket.dayMinute(epoch: entry.epoch)
-            byDay[day, default: Array(repeating: MinuteBucket(), count: 1440)][minute]
-                .add(input: entry.input, output: entry.output,
-                     cacheCreation: entry.cacheCreation, cacheRead: entry.cacheRead, model: entry.model)
-        }
-        return byDay
-    }
-
-    // MARK: - Reading
-
-    /// All parsed records (pre-dedup), re-parsing only files whose mtime/size
-    /// changed; unchanged files reuse cached records, so the recurring refresh stays
-    /// cheap once the first full scan is warm.
+    /// All parsed records, re-parsing only files whose mtime/size changed; unchanged
+    /// files reuse cached records, so the recurring refresh stays cheap once warm.
     private func cachedRecords() -> [UsageRecord] {
         let files = Self.claudeProjectRoots().flatMap { Self.jsonlFiles(under: $0) }
         return cache.records(for: files, parse: Self.parseFile)
     }
 
-    /// Per-day totals (deduped).
-    private func readDaily() -> [DailyUsage] {
-        var byDay: [String: DayAccumulator] = [:]
-        for entry in Dedup.collapse(cachedRecords()) {
-            byDay[DayBucket.day(epoch: entry.epoch), default: DayAccumulator()].add(entry)
-        }
-        return byDay
-            .map { $0.value.makeDailyUsage(date: $0.key) }
-            .sorted { $0.date < $1.date }
-    }
+    // MARK: - Parsing
 
     /// Parse one JSONL file into usage records (cross-file dedup happens later).
     private static func parseFile(_ file: URL) -> [UsageRecord] {
@@ -157,43 +129,6 @@ final class ClaudeNativeProvider: UsageProvider {
         return files
     }
 
-}
-
-// MARK: - Per-day accumulation
-
-private struct DayAccumulator {
-    var input = 0
-    var output = 0
-    var cacheCreation = 0
-    var cacheRead = 0
-    var cost = 0.0
-    var models = Set<String>()
-
-    mutating func add(_ entry: UsageRecord) {
-        input += entry.input
-        output += entry.output
-        cacheCreation += entry.cacheCreation
-        cacheRead += entry.cacheRead
-        if let model = entry.model, model != "<synthetic>" { models.insert(model) }
-        // Cost is per-message (each model has its own prices), summed per day.
-        if let pricing = PricingStore.shared.pricing(for: entry.model) {
-            cost += pricing.cost(input: entry.input, output: entry.output,
-                                 cacheCreation: entry.cacheCreation, cacheRead: entry.cacheRead)
-        }
-    }
-
-    func makeDailyUsage(date: String) -> DailyUsage {
-        DailyUsage(
-            date: date,
-            inputTokens: input,
-            outputTokens: output,
-            cacheCreationTokens: cacheCreation,
-            cacheReadTokens: cacheRead,
-            totalTokens: input + output + cacheCreation + cacheRead,
-            totalCost: cost,
-            models: models.sorted()
-        )
-    }
 }
 
 // MARK: - Tolerant JSONL line shape (only the fields we read)

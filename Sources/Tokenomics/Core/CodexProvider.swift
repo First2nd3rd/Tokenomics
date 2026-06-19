@@ -2,44 +2,35 @@ import Foundation
 
 /// Reads OpenAI Codex usage from `~/.codex/sessions/**/rollout-*.jsonl`.
 ///
-/// `token_count` events carry a CUMULATIVE `total_token_usage` per session. We
-/// bucket per-event deltas (current cumulative − previous) by local day, which
-/// naturally dedups repeated events and splits sessions that cross midnight.
-/// Mapping to the normalized model:
+/// `token_count` events carry a CUMULATIVE `total_token_usage` per session. We emit
+/// per-event deltas (current cumulative − previous), which naturally dedups repeated
+/// events. Mapping to the normalized model:
 ///   - cacheRead       = cached_input_tokens
 ///   - input           = input_tokens − cached_input_tokens (non-cached input)
 ///   - output          = output_tokens (already includes reasoning tokens)
 ///   - cacheCreation   = 0 (Codex has no cache-creation concept)
-/// Cost comes from the shared price table; models without a price (e.g.
-/// `codex-auto-review`) contribute tokens but $0, matching ccusage.
 ///
 /// Each record carries a dedup key = hash(rollout-file-name : event-index). The
 /// filename holds the session UUID and is preserved by any file sync, so the same
-/// event hashes identically on every machine. Locally each event's key is unique,
-/// so `Dedup.collapse` is a no-op and daily totals are unchanged; the key only does
-/// work in the cross-machine union, where it prevents double-counting a rollout file
-/// that reached two machines (e.g. a synced `~/.codex`).
+/// event hashes identically on every machine. Locally each event's key is unique, so
+/// the downstream collapse is a no-op; the key only does work in the cross-machine
+/// union, where it prevents double-counting a rollout file that reached two machines.
 ///
-/// Deltas are computed per file, so each file's parsed records are self-contained
-/// and cacheable by (mtime, size) — identical to the Claude reader — which keeps
-/// recurring refreshes off the full-rescan path once warm.
+/// This provider only PARSES; deduping, day bucketing, and cost happen once,
+/// downstream, over the union of all sources (`UsageAggregator`).
 final class CodexProvider: UsageProvider {
     let id = "codex"
 
     /// Per-file parse cache with NDJSON persistence; the version in the filename is
-    /// the format version.
+    /// the format version. Deltas are computed per file, so each file's records are
+    /// self-contained and cacheable by (mtime, size).
     private let cache = FileRecordCache<UsageRecord>(diskFileName: "codex-records-v3.ndjson",
                                                      queueLabel: "tokenomics.codex-reader")
 
-    func fetchDaily(completion: @escaping (Result<[DailyUsage], Error>) -> Void) {
+    /// Raw, pre-dedup records; the union + single `Dedup.collapse` happens upstream.
+    func fetchRecords(completion: @escaping ([UsageRecord]) -> Void) {
         DispatchQueue.global(qos: .utility).async {
-            completion(.success(self.readDaily()))
-        }
-    }
-
-    func fetchDayMinuteMatrix(completion: @escaping ([String: [MinuteBucket]]) -> Void) {
-        DispatchQueue.global(qos: .utility).async {
-            completion(self.dayMinuteMatrix())
+            completion(self.cachedRecords())
         }
     }
 
@@ -48,28 +39,7 @@ final class CodexProvider: UsageProvider {
         cache.records(for: Self.rolloutFiles(), parse: Self.parseFile)
     }
 
-    /// Per-day totals.
-    private func readDaily() -> [DailyUsage] {
-        var byDay: [String: CodexDay] = [:]
-        for r in Dedup.collapse(cachedRecords()) {
-            byDay[DayBucket.day(epoch: r.epoch), default: CodexDay()].add(input: r.input, output: r.output,
-                                                  cacheRead: r.cacheRead, model: r.model)
-        }
-        return byDay
-            .map { $0.value.makeDailyUsage(date: $0.key) }
-            .sorted { $0.date < $1.date }
-    }
-
-    /// Per-minute buckets (by type + by model) for every day with data.
-    private func dayMinuteMatrix() -> [String: [MinuteBucket]] {
-        var byDay: [String: [MinuteBucket]] = [:]
-        for r in Dedup.collapse(cachedRecords()) {
-            let (day, minute) = DayBucket.dayMinute(epoch: r.epoch)
-            byDay[day, default: Array(repeating: MinuteBucket(), count: 1440)][minute]
-                .add(input: r.input, output: r.output, cacheCreation: 0, cacheRead: r.cacheRead, model: r.model)
-        }
-        return byDay
-    }
+    // MARK: - Parsing
 
     /// Parse one rollout file into per-event delta records. Cumulative counters are
     /// tracked within the file; the model carries forward from the latest
@@ -123,6 +93,8 @@ final class CodexProvider: UsageProvider {
         return records
     }
 
+    // MARK: - Discovery
+
     /// All `rollout-*.jsonl` under `~/.codex/sessions` (or `$CODEX_HOME`).
     private static func rolloutFiles() -> [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -140,39 +112,6 @@ final class CodexProvider: UsageProvider {
             files.append(url)
         }
         return files
-    }
-}
-
-// MARK: - Per-day accumulation
-
-private struct CodexDay {
-    var input = 0
-    var output = 0
-    var cacheRead = 0
-    var cost = 0.0
-    var models = Set<String>()
-
-    mutating func add(input: Int, output: Int, cacheRead: Int, model: String?) {
-        self.input += input
-        self.output += output
-        self.cacheRead += cacheRead
-        if let model { models.insert(model) }
-        if let pricing = PricingStore.shared.pricing(for: model) {
-            cost += pricing.cost(input: input, output: output, cacheCreation: 0, cacheRead: cacheRead)
-        }
-    }
-
-    func makeDailyUsage(date: String) -> DailyUsage {
-        DailyUsage(
-            date: date,
-            inputTokens: input,
-            outputTokens: output,
-            cacheCreationTokens: 0,
-            cacheReadTokens: cacheRead,
-            totalTokens: input + output + cacheRead,
-            totalCost: cost,
-            models: models.sorted()
-        )
     }
 }
 
