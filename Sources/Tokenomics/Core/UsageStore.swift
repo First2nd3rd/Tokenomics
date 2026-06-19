@@ -5,6 +5,15 @@ struct UsageSnapshot {
     let days: [DailyUsage]
 }
 
+/// One machine's contribution for the by-machine view + status line.
+struct MachineSummary: Identifiable {
+    let id: String           // machine id
+    let name: String
+    let todayTokens: Int
+    let lastSeen: Int        // UTC epoch (a peer's publishedAt; now for this Mac)
+    let isLocal: Bool
+}
+
 /// Owns the provider layer and exposes refresh + publish entry points. Results are
 /// delivered (by default) on the main queue, ready for UI.
 ///
@@ -16,6 +25,7 @@ final class UsageStore {
     private let localProviders: [UsageProvider]
     private let peerSource: PeerRecordSource
     private let publisher: PeerPublisher
+    private let machineId: String
     private let isSyncEnabled: () -> Bool
     private let deliver: (@escaping () -> Void) -> Void
 
@@ -27,6 +37,7 @@ final class UsageStore {
         self.localProviders = localProviders
         self.peerSource = PeerRecordSource(folder: folder, ownMachineId: machineId)
         self.publisher = PeerPublisher(folder: folder, machineId: machineId)
+        self.machineId = machineId
         self.isSyncEnabled = isSyncEnabled
         self.deliver = deliver
     }
@@ -49,6 +60,29 @@ final class UsageStore {
         provider.fetchDayMinuteMatrix { matrix in
             let trimmed = DayBucket.recentDays(matrix, now: now, count: lastDays)
             self.deliver { completion(trimmed) }
+        }
+    }
+
+    /// Per-machine summaries for today (this Mac + each peer), for the by-machine view
+    /// and status line. Empty when sync is off. Delivered ready for UI.
+    func refreshMachines(now: Date = Date(), completion: @escaping ([MachineSummary]) -> Void) {
+        guard isSyncEnabled() else { deliver { completion([]) }; return }
+        CombinedProvider(localProviders + [peerSource]).fetchRecords { records in
+            let today = DayBucket.dayKey(now)
+            var tokens: [String: Int] = [:]
+            for r in Dedup.collapse(records) where DayBucket.day(epoch: r.epoch) == today {
+                let machine = r.machine ?? self.machineId
+                tokens[machine, default: 0] += r.input + r.output + r.cacheCreation + r.cacheRead
+            }
+            var summaries = [MachineSummary(id: self.machineId, name: DeviceIdentity.displayName(),
+                                            todayTokens: tokens[self.machineId] ?? 0,
+                                            lastSeen: Int(now.timeIntervalSince1970), isLocal: true)]
+            for info in self.peerSource.peerInfos() {
+                summaries.append(MachineSummary(id: info.machineId, name: info.displayName,
+                                                todayTokens: tokens[info.machineId] ?? 0,
+                                                lastSeen: info.publishedAt, isLocal: false))
+            }
+            self.deliver { completion(summaries.sorted { $0.todayTokens > $1.todayTokens }) }
         }
     }
 

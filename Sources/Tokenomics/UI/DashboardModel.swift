@@ -35,6 +35,9 @@ final class DashboardModel: ObservableObject {
     // Recent days for the daily stacked-by-type bar chart (ascending by date).
     @Published var dailyBars: [DailyUsage] = []
 
+    // Per-machine breakdown (this Mac + peers) — empty unless cross-machine sync is on.
+    @Published var machines: [MachineSummary] = []
+
     private static let bucketMinutes = 5
 
     /// Collapse per-minute token counts into 5-minute buckets up to `nowMinute`.

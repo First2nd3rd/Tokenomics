@@ -1,5 +1,13 @@
 import Foundation
 
+/// Lightweight metadata about a peer's published file, for the by-machine view and
+/// status line. Captured on each read alongside the records.
+struct PeerInfo {
+    let machineId: String
+    let displayName: String
+    let publishedAt: Int     // UTC epoch of the peer's last publish
+}
+
 /// A usage source backed by peers' published files. Returns every peer's records
 /// (each tagged with its machine), SKIPPING this machine's own file — identified by
 /// the manifest id, so a renamed or iCloud-conflict copy of our own file is excluded.
@@ -19,6 +27,7 @@ final class PeerRecordSource: UsageProvider {
 
     private struct CachedPeer {
         let machineId: String
+        let displayName: String
         let publishedAt: Int
         let records: [UsageRecord]
     }
@@ -27,6 +36,7 @@ final class PeerRecordSource: UsageProvider {
     private let ownMachineId: String
     private let lock = NSLock()
     private var lastKnown: [String: CachedPeer] = [:]   // file path -> last good read
+    private var lastInfos: [PeerInfo] = []              // peers seen on the last read
 
     init(folder: PeerFolder, ownMachineId: String = DeviceIdentity.id) {
         self.folder = folder
@@ -37,6 +47,13 @@ final class PeerRecordSource: UsageProvider {
         DispatchQueue.global(qos: .utility).async {
             completion(self.readPeers())
         }
+    }
+
+    /// Metadata (id, name, last-publish time) for the peers seen on the last read —
+    /// drives the by-machine view's names + "synced N ago". Read after `readPeers`.
+    func peerInfos() -> [PeerInfo] {
+        lock.lock(); defer { lock.unlock() }
+        return lastInfos
     }
 
     /// Read + union all peer files (own excluded, one newest file per machine),
@@ -53,6 +70,7 @@ final class PeerRecordSource: UsageProvider {
             let peer: CachedPeer
             if let data = folder.readData(at: url), let contents = PeerFile.decode(data) {
                 peer = CachedPeer(machineId: contents.manifest.machineId,
+                                  displayName: contents.manifest.displayName,
                                   publishedAt: contents.manifest.publishedAt,
                                   records: contents.records)
                 lock.lock(); lastKnown[path] = peer; lock.unlock()
@@ -69,9 +87,11 @@ final class PeerRecordSource: UsageProvider {
             newestByMachine[peer.machineId] = peer
         }
 
-        // Drop memory of files that are gone for good.
         lock.lock()
-        lastKnown = lastKnown.filter { present.contains($0.key) }
+        lastKnown = lastKnown.filter { present.contains($0.key) }    // drop files gone for good
+        lastInfos = newestByMachine.values.map {
+            PeerInfo(machineId: $0.machineId, displayName: $0.displayName, publishedAt: $0.publishedAt)
+        }
         lock.unlock()
 
         return newestByMachine.values.flatMap { $0.records }

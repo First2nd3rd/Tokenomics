@@ -120,6 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.present(perVendor: perVendor, matrix: matrix, now: now)
         }
 
+        // Per-machine breakdown for the by-machine view (empty when sync is off).
+        store.refreshMachines(now: now) { [weak self] in self?.model.machines = $0 }
+
         // Publish this machine's records for other Macs (no-op when sync is off or
         // nothing changed since the last publish).
         store.publishIfNeeded()

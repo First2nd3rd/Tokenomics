@@ -53,6 +53,11 @@ struct DashboardView: View {
                 ForEach(visiblePayback) { paybackRow($0) }
             }
 
+            if model.machines.count >= 2 {
+                sectionLabel("Across \(model.machines.count) Macs · today")
+                ForEach(model.machines) { machineRow($0) }
+            }
+
             HStack(spacing: 12) {
                 Button("Refresh", action: onRefresh)
                 Spacer()
@@ -391,6 +396,47 @@ struct DashboardView: View {
     /// two surfaces match (Claude orange, GPT teal).
     private func vendorColor(_ vendor: Vendor) -> Color {
         ModelColors.color(for: vendor == .claude ? "claude" : "gpt")
+    }
+
+    // MARK: - By-machine breakdown (cross-machine sync)
+
+    /// One machine's row: name + today's tokens + a share bar; peers also show
+    /// "synced N ago". This Mac is highlighted; peers get a stable hue.
+    private func machineRow(_ m: MachineSummary) -> some View {
+        let maxTokens = model.machines.map(\.todayTokens).max() ?? 0
+        let track: CGFloat = 380
+        let frac = maxTokens > 0 ? CGFloat(m.todayTokens) / CGFloat(maxTokens) : 0
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(m.name).font(.caption).fontWeight(m.isLocal ? .semibold : .regular)
+                if m.isLocal { Text("this Mac").font(.caption2).foregroundStyle(.secondary) }
+                Spacer()
+                Text(Format.tokensShort(m.todayTokens)).font(.caption).foregroundStyle(.secondary)
+            }
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.secondary.opacity(0.15)).frame(width: track, height: 6)
+                Capsule().fill(machineColor(m)).frame(width: max(2, track * frac), height: 6)
+            }
+            if !m.isLocal {
+                Text(lastSeenText(m.lastSeen)).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 380, alignment: .leading)
+    }
+
+    /// This Mac uses the accent; each peer gets a stable hue from its id.
+    private func machineColor(_ m: MachineSummary) -> Color {
+        if m.isLocal { return .accentColor }
+        let seed = m.id.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        return Color(hue: Double(seed % 360) / 360.0, saturation: 0.5, brightness: 0.72)
+    }
+
+    private func lastSeenText(_ epoch: Int) -> String {
+        let secs = Int(Date().timeIntervalSince1970) - epoch
+        if secs < 90 { return "synced just now" }
+        if secs < 3_600 { return "synced \(secs / 60)m ago" }
+        if secs < 86_400 { return "synced \(secs / 3_600)h ago" }
+        return "synced \(secs / 86_400)d ago"
     }
 
     // MARK: - Shared axes

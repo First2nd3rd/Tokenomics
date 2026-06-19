@@ -102,6 +102,35 @@ struct UsageStoreTests {
         #expect(folder.writeCount == 1)                       // enabled → writes own file
     }
 
+    @Test("refreshMachines summarizes this Mac + peers for today")
+    func machineSummaries() {
+        let folder = TestFolder()
+        folder.files["tok-peer.ndjson"] = peerFile(
+            machineId: "peer", records: [record(.codex, key: "P", input: 50)])
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: folder, machineId: "own",
+                               isSyncEnabled: { true }, deliver: immediate)
+
+        let machines: [MachineSummary] = run { store.refreshMachines(now: Date(), completion: $0) }
+        #expect(machines.count == 2)
+        let byId = Dictionary(uniqueKeysWithValues: machines.map { ($0.id, $0) })
+        #expect(byId["own"]?.todayTokens == 10)
+        #expect(byId["own"]?.isLocal == true)
+        #expect(byId["peer"]?.todayTokens == 50)
+        #expect(byId["peer"]?.isLocal == false)
+        #expect(byId["peer"]?.name == "peer")          // from the peer's manifest
+    }
+
+    @Test("refreshMachines is empty when sync is off")
+    func machineSummariesOff() {
+        let folder = TestFolder()
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: folder, machineId: "own",
+                               isSyncEnabled: { false }, deliver: immediate)
+        let machines: [MachineSummary] = run { store.refreshMachines(now: Date(), completion: $0) }
+        #expect(machines.isEmpty)
+    }
+
     @Test("retractOwnFile deletes this machine's published file")
     func retractDeletesOwnFile() {
         let folder = TestFolder()
