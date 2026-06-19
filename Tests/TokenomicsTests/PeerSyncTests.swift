@@ -57,6 +57,30 @@ struct PeerSyncTests {
         #expect(PeerRecordSource(folder: folder, ownMachineId: "own").readPeers().isEmpty)
     }
 
+    @Test("a peer's iCloud conflict copy does not double-count its keyless records")
+    func peerConflictCopyNoDoubleCount() {
+        let folder = StubFolder()
+        let keyless = rec(.claude, key: nil, input: 10, model: "m")   // can't be deduped by key
+        folder.files["tok-peer.ndjson"] = peerData(machineId: "peer", records: [keyless], at: 1000)
+        folder.files["tok-peer 2.ndjson"] = peerData(machineId: "peer", records: [keyless], at: 1000)  // conflict copy
+
+        let recs = PeerRecordSource(folder: folder, ownMachineId: "own").readPeers()
+        #expect(recs.count == 1)            // counted once, not twice
+        #expect(recs.first?.input == 10)
+    }
+
+    @Test("keeps the newest file when a peer has two by publishedAt")
+    func peerKeepsNewestCopy() {
+        let folder = StubFolder()
+        folder.files["tok-peer.ndjson"] = peerData(
+            machineId: "peer", records: [rec(.claude, key: "A", input: 1)], at: 1000)
+        folder.files["tok-peer 2.ndjson"] = peerData(
+            machineId: "peer", records: [rec(.claude, key: "A", input: 1), rec(.claude, key: "B", input: 2)], at: 2000)
+
+        let recs = PeerRecordSource(folder: folder, ownMachineId: "own").readPeers()
+        #expect(recs.count == 2)            // the newer file (publishedAt 2000) wins
+    }
+
     @Test("retains a peer's last-known records when its file is transiently unreadable")
     func retainsLastKnown() {
         let folder = StubFolder()
