@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let loginItem = LoginItemModel()
     private var settingsWindow: NSWindow?
     private var timer: Timer?
+    private var lastSyncEnabled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Default Custom-plan fees so the engine (raw UserDefaults) and the Settings
@@ -30,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             CostBasisStore.claudeCustomKey: 100,
             CostBasisStore.gptCustomKey: 20,
         ])
+        lastSyncEnabled = UserDefaults.standard.bool(forKey: "syncEnabled")
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -56,7 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Re-render the menu-bar icon immediately when its Settings picker changes.
         NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.applyMenuBarIcon() }
+        ) { [weak self] _ in
+            self?.applyMenuBarIcon()
+            self?.syncSettingChanged()
+        }
 
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
@@ -114,6 +119,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         group.notify(queue: .main) { [weak self] in
             self?.present(perVendor: perVendor, matrix: matrix, now: now)
         }
+
+        // Publish this machine's records for other Macs (no-op when sync is off or
+        // nothing changed since the last publish).
+        store.publishIfNeeded()
+    }
+
+    /// Flush a final publish on quit so the last bit of usage reaches other Macs
+    /// (no-op when sync is off or nothing changed).
+    func applicationWillTerminate(_ notification: Notification) {
+        store.flushPublish()
+    }
+
+    /// React to the sync toggle: when it flips OFF, retract this Mac's published file
+    /// so peers stop counting it.
+    private func syncSettingChanged() {
+        let enabled = UserDefaults.standard.bool(forKey: "syncEnabled")
+        if lastSyncEnabled && !enabled { store.retractOwnFile() }
+        lastSyncEnabled = enabled
     }
 
     /// Push one fully-assembled refresh into the view model (main queue). The
@@ -252,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 380, height: 440),
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 560),
                 styleMask: [.titled, .closable],
                 backing: .buffered, defer: false
             )

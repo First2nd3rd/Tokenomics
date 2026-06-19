@@ -60,6 +60,16 @@ struct ICloudDriveFolder: PeerFolder {
         try coordinatedWrite(data, to: dir.appendingPathComponent(peerFileName(forMachine: machineId)))
     }
 
+    func removeOwnFile(machineId: String) {
+        guard let dir = directoryURL else { return }
+        let url = dir.appendingPathComponent(peerFileName(forMachine: machineId))
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordError: NSError?
+        coordinator.coordinate(writingItemAt: url, options: .forDeleting, error: &coordError) { target in
+            try? FileManager.default.removeItem(at: target)
+        }
+    }
+
     // MARK: - File coordination
 
     private func coordinatedRead(_ url: URL) -> Data? {

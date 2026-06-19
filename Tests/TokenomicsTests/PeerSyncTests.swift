@@ -20,6 +20,10 @@ private final class StubFolder: PeerFolder {
         files[peerFileName(forMachine: machineId)] = data
         writeCount += 1
     }
+
+    func removeOwnFile(machineId: String) {
+        files.removeValue(forKey: peerFileName(forMachine: machineId))
+    }
 }
 
 @Suite("Peer sync")

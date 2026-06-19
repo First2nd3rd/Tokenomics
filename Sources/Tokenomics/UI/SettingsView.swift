@@ -46,6 +46,8 @@ struct SettingsView: View {
     @AppStorage(CostBasisStore.gptPlanKey) private var gptPlan: GPTPlan = .api
     @AppStorage(CostBasisStore.claudeCustomKey) private var claudeCustomFee: Double = 100
     @AppStorage(CostBasisStore.gptCustomKey) private var gptCustomFee: Double = 20
+    @AppStorage("syncEnabled") private var syncEnabled = false
+    @AppStorage(DeviceIdentity.displayNameKey) private var machineName = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -83,6 +85,34 @@ struct SettingsView: View {
             }
 
             Divider().padding(.vertical, 2)
+            Text("Cross-machine sync")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            row("Sync across Macs",
+                subtitle: "Aggregate usage from your other Macs via iCloud Drive. Only token counts leave this Mac — never prompts, file paths, or keys — and nothing is sent until you turn this on.") {
+                Toggle("", isOn: $syncEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+            }
+            if syncEnabled && ICloudDriveFolder().directoryURL == nil {
+                Text("iCloud Drive looks turned off — sync stays local-only. Enable it in System Settings → Apple ID → iCloud → iCloud Drive.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if syncEnabled {
+                row("This Mac's name",
+                    subtitle: "Identifies this Mac to your other Macs.") {
+                    TextField("", text: $machineName,
+                              prompt: Text(Host.current().localizedName ?? "This Mac"))
+                        .frame(width: 140)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.small)
+                }
+            }
+
+            Divider().padding(.vertical, 2)
             Text("Subscription — for break-even")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -102,7 +132,7 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 380, height: 440, alignment: .topLeading)
+        .frame(width: 380, height: 560, alignment: .topLeading)
         .onAppear { login.refresh() }
     }
 

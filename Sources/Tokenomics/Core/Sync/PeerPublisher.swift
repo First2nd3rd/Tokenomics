@@ -31,20 +31,29 @@ final class PeerPublisher {
     }
 
     /// Publish `localRecords` (this machine's records) if they changed since the last
-    /// publish and the throttle has elapsed. `now` is injectable for tests. Returns
-    /// whether a file was written.
+    /// publish and the throttle has elapsed. `force` (used at app quit) bypasses the
+    /// throttle but still respects only-on-change, so a quit with no new usage writes
+    /// nothing. `now` is injectable for tests. Returns whether a file was written.
     @discardableResult
-    func publishIfNeeded(localRecords: [UsageRecord], now: Date = Date()) -> Bool {
+    func publishIfNeeded(localRecords: [UsageRecord], now: Date = Date(), force: Bool = false) -> Bool {
         let cutoff = Int(now.timeIntervalSince1970) - windowDays * 86_400
         let windowed = localRecords.filter { $0.epoch >= cutoff }
         let fingerprint = Self.fingerprint(windowed)
 
+        // First call after launch: seed the baseline from our already-published file,
+        // so a relaunch with unchanged data writes nothing ("no update ⇒ don't touch
+        // iCloud"). Done OUTSIDE the lock — currentlyPublishedFingerprint does blocking
+        // iCloud I/O, and the lock must never be held across I/O or concurrent publishes
+        // would wedge behind it.
+        lock.lock(); let needsSeed = lastFingerprint == nil; lock.unlock()
+        if needsSeed {
+            let seeded = currentlyPublishedFingerprint()
+            lock.lock(); if lastFingerprint == nil { lastFingerprint = seeded }; lock.unlock()
+        }
+
         lock.lock()
-        // First call after launch: seed from our already-published file, so a relaunch
-        // with unchanged data writes nothing ("no update ⇒ don't touch iCloud").
-        if lastFingerprint == nil { lastFingerprint = currentlyPublishedFingerprint() }
         let unchanged = fingerprint == lastFingerprint
-        let tooSoon = now.timeIntervalSince(lastPublishedAt) < throttle
+        let tooSoon = !force && now.timeIntervalSince(lastPublishedAt) < throttle
         lock.unlock()
         guard !unchanged, !tooSoon else { return false }
 
@@ -58,6 +67,16 @@ final class PeerPublisher {
         } catch {
             return false   // degrade silently
         }
+    }
+
+    /// Delete this machine's published file (when the user turns sync off) and reset
+    /// the change baseline, so re-enabling later republishes from scratch.
+    func retract() {
+        folder.removeOwnFile(machineId: machineId)
+        lock.lock()
+        lastFingerprint = nil
+        lastPublishedAt = .distantPast
+        lock.unlock()
     }
 
     // MARK: - Helpers

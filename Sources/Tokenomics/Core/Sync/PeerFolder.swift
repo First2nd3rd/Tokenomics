@@ -18,6 +18,10 @@ protocol PeerFolder {
 
     /// Atomically (re)write this machine's own file.
     func writeOwnFile(_ data: Data, machineId: String) throws
+
+    /// Best-effort delete of this machine's own file (when the user turns sync off),
+    /// so peers stop counting this Mac. Errors are ignored.
+    func removeOwnFile(machineId: String)
 }
 
 /// One file per machine, named by its id (single-writer ⇒ no write conflicts).
@@ -45,5 +49,10 @@ struct LocalFolder: PeerFolder {
     func writeOwnFile(_ data: Data, machineId: String) throws {
         guard let dir = directoryURL else { throw CocoaError(.fileNoSuchFile) }
         try data.write(to: dir.appendingPathComponent(peerFileName(forMachine: machineId)), options: .atomic)
+    }
+
+    func removeOwnFile(machineId: String) {
+        guard let dir = directoryURL else { return }
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(peerFileName(forMachine: machineId)))
     }
 }
