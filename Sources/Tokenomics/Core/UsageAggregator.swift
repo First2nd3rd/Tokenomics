@@ -63,6 +63,28 @@ enum UsageAggregator {
         return byDay
     }
 
+    /// Combined and LOCAL-ONLY day→minute matrices in one pass. The live last-hour
+    /// chart draws the local series at true height plus a (combined − local) peer
+    /// overlay — a record's `nil` machine is the local Mac. The peer overlay therefore
+    /// lags naturally: a not-yet-synced recent minute has combined == local ⇒ 0.
+    static func splitDayMinuteMatrix(_ records: [UsageRecord])
+        -> (combined: [String: [MinuteBucket]], local: [String: [MinuteBucket]]) {
+        var combined: [String: [MinuteBucket]] = [:]
+        var local: [String: [MinuteBucket]] = [:]
+        for r in Dedup.collapse(records) {
+            let (day, minute) = DayBucket.dayMinute(epoch: r.epoch)
+            combined[day, default: Array(repeating: MinuteBucket(), count: 1440)][minute]
+                .add(input: r.input, output: r.output,
+                     cacheCreation: r.cacheCreation, cacheRead: r.cacheRead, model: r.model)
+            if r.machine == nil {
+                local[day, default: Array(repeating: MinuteBucket(), count: 1440)][minute]
+                    .add(input: r.input, output: r.output,
+                         cacheCreation: r.cacheCreation, cacheRead: r.cacheRead, model: r.model)
+            }
+        }
+        return (combined, local)
+    }
+
     // MARK: - Internal
 
     /// Group ALREADY-collapsed records into per-day totals. Caller collapses first.

@@ -24,6 +24,24 @@ struct DashboardView: View {
         return min(24, max(0.5, now + 0.04))
     }
 
+    /// Pin a chart's y-axis to start at 0 (so a flat all-zero series sits at the bottom
+    /// instead of being auto-centered), with a floor of 1 and a little headroom.
+    private func yUpper(_ peak: Int) -> Int { max(Int(Double(peak) * 1.08), 1) }
+
+    private func rateYUpper(_ points: [RatePoint], _ peer: [LivePoint]) -> Int {
+        yUpper(max(points.map(\.total).max() ?? 0, peer.map(\.total).max() ?? 0))
+    }
+
+    /// Peak across the cumulative today / typical / projected lines.
+    private var cumYUpper: Int {
+        yUpper(([model.cumToday, model.cumTypical, model.cumPredicted].flatMap { $0 }).map(\.tokens).max() ?? 0)
+    }
+
+    /// Peak daily stack height (the four bands sum to the day's total).
+    private var dailyYUpper: Int {
+        yUpper(model.dailyBars.map(\.totalTokens).max() ?? 0)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
@@ -125,11 +143,24 @@ struct DashboardView: View {
 
     @ViewBuilder private var rateChart: some View {
         let points = ratePage == 0 ? model.rateLive : model.rate5min
+        let peer = ratePage == 0 ? model.rateLivePeer : []
         let axis = ratePage == 0 ? liveAxis : dayAxis
         switch rateStyle {
-        case .line:    lineRateChart(points, axis)
-        case .stacked: stackedRateChart(points, axis)
-        case .model:   modelRateChart(points, axis)
+        case .line:    lineRateChart(points, peer, axis)
+        case .stacked: stackedRateChart(points, peer, axis)
+        case .model:   modelRateChart(points, peer, axis)
+        }
+    }
+
+    /// The other Macs' last-hour activity as one light line on top of the local
+    /// series — never added to it. Empty on the full-day page and when sync is off.
+    @ChartContentBuilder private func peerOverlay(_ peer: [LivePoint]) -> some ChartContent {
+        ForEach(peer) { p in
+            LineMark(x: .value("Time", p.x), y: .value("Tokens", p.total),
+                     series: .value("Series", "Other Macs"))
+                .foregroundStyle(Color.secondary.opacity(0.45))
+                .interpolationMethod(.monotone)
+                .lineStyle(StrokeStyle(lineWidth: 1.2))
         }
     }
 
@@ -152,39 +183,47 @@ struct DashboardView: View {
     }
 
     /// Default: a single accent line over a faint area fill (the total per bucket).
-    private func lineRateChart(_ points: [RatePoint], _ axis: RateAxis) -> some View {
-        Chart(points) { point in
-            AreaMark(x: .value("Time", point.x), y: .value("Tokens", point.total))
-                .interpolationMethod(.monotone)
-                .foregroundStyle(
-                    .linearGradient(
-                        colors: [Color.accentColor.opacity(0.45), Color.accentColor.opacity(0.10)],
-                        startPoint: .top, endPoint: .bottom
+    private func lineRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
+        Chart {
+            ForEach(points) { point in
+                AreaMark(x: .value("Time", point.x), y: .value("Tokens", point.total))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [Color.accentColor.opacity(0.45), Color.accentColor.opacity(0.10)],
+                            startPoint: .top, endPoint: .bottom
+                        )
                     )
-                )
-            LineMark(x: .value("Time", point.x), y: .value("Tokens", point.total))
-                .interpolationMethod(.monotone)
-                .foregroundStyle(Color.accentColor)
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
+                LineMark(x: .value("Time", point.x), y: .value("Tokens", point.total))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(Color.accentColor)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+            }
+            peerOverlay(peer)
         }
         .chartXScale(domain: axis.domain)
+        .chartYScale(domain: 0...rateYUpper(points, peer))
         .chartXAxis { rateXAxis(axis) }
         .chartYAxis { tokenAxis }
         .frame(width: 380, height: 84)
     }
 
     /// Optional: a smooth area stacked by token type (cache-read usually dominates).
-    private func stackedRateChart(_ points: [RatePoint], _ axis: RateAxis) -> some View {
-        Chart(points) { point in
-            ForEach(Self.bands, id: \.name) { band in
-                AreaMark(x: .value("Time", point.x), y: .value("Tokens", band.value(point.counts)))
-                    .foregroundStyle(by: .value("Type", band.name))
-                    .interpolationMethod(.monotone)
+    private func stackedRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
+        Chart {
+            ForEach(points) { point in
+                ForEach(Self.bands, id: \.name) { band in
+                    AreaMark(x: .value("Time", point.x), y: .value("Tokens", band.value(point.counts)))
+                        .foregroundStyle(by: .value("Type", band.name))
+                        .interpolationMethod(.monotone)
+                }
             }
+            peerOverlay(peer)
         }
         .chartForegroundStyleScale(domain: Self.bands.map(\.name), range: Self.bands.map(\.color))
         .chartLegend(.hidden)
         .chartXScale(domain: axis.domain)
+        .chartYScale(domain: 0...rateYUpper(points, peer))
         .chartXAxis { rateXAxis(axis) }
         .chartYAxis { tokenAxis }
         .frame(width: 380, height: 84)
@@ -207,19 +246,23 @@ struct DashboardView: View {
 
     private var modelColorOrder: [ModelColors.Entry] { ModelColors.assign(model.models) }
 
-    private func modelRateChart(_ points: [RatePoint], _ axis: RateAxis) -> some View {
+    private func modelRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
         let order = modelColorOrder
-        return Chart(points) { point in
-            ForEach(order) { entry in
-                AreaMark(x: .value("Time", point.x),
-                         y: .value("Tokens", point.byModel[entry.model] ?? 0))
-                    .foregroundStyle(by: .value("Model", entry.model))
-                    .interpolationMethod(.monotone)
+        return Chart {
+            ForEach(points) { point in
+                ForEach(order) { entry in
+                    AreaMark(x: .value("Time", point.x),
+                             y: .value("Tokens", point.byModel[entry.model] ?? 0))
+                        .foregroundStyle(by: .value("Model", entry.model))
+                        .interpolationMethod(.monotone)
+                }
             }
+            peerOverlay(peer)
         }
         .chartForegroundStyleScale(domain: order.map(\.model), range: order.map(\.color))
         .chartLegend(.hidden)
         .chartXScale(domain: axis.domain)
+        .chartYScale(domain: 0...rateYUpper(points, peer))
         .chartXAxis { rateXAxis(axis) }
         .chartYAxis { tokenAxis }
         .frame(width: 380, height: 84)
@@ -287,6 +330,7 @@ struct DashboardView: View {
         }
         .chartForegroundStyleScale(domain: Self.bands.map(\.name), range: Self.bands.map(\.color))
         .chartLegend(.hidden)
+        .chartYScale(domain: 0...dailyYUpper)
         .chartXAxis {
             AxisMarks(values: sparseBarLabels) { value in
                 AxisValueLabel {
@@ -332,6 +376,7 @@ struct DashboardView: View {
             }
         }
         .chartXScale(domain: 0...24)
+        .chartYScale(domain: 0...cumYUpper)
         .chartXAxis {
             AxisMarks(values: [0, 6, 12, 18, 24]) { value in
                 AxisGridLine()

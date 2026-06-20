@@ -145,6 +145,19 @@ struct UsageAggregatorTests {
 
     // MARK: - matrix
 
+    @Test("splitDayMinuteMatrix keeps combined = all but local = nil-machine only")
+    func splitMatrix() {
+        let recs = [
+            rec(source: .claude, key: "A", input: 10, model: "m"),                       // local (nil)
+            rec(source: .claude, key: "B", input: 20, model: "m").with(machine: "peer"), // a peer
+        ]
+        let (combined, local) = UsageAggregator.splitDayMinuteMatrix(recs)
+        let c = combined.values.flatMap { $0 }.reduce(0) { $0 + $1.counts.total }
+        let l = local.values.flatMap { $0 }.reduce(0) { $0 + $1.counts.total }
+        #expect(c == 30)   // 10 local + 20 peer
+        #expect(l == 10)   // local only ⇒ the live series' true height (peer overlay = c − l)
+    }
+
     @Test("dayMinuteMatrix buckets records with a by-model split")
     func matrixBuckets() throws {
         let m = UsageAggregator.dayMinuteMatrix([

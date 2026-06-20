@@ -109,15 +109,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let group = DispatchGroup()
         var perVendor: [String: [DailyUsage]] = [:]
         var matrix: [String: [MinuteBucket]] = [:]
+        var localMatrix: [String: [MinuteBucket]] = [:]
 
         group.enter()
         store.refreshByVendor { perVendor = $0; group.leave() }
 
         group.enter()
-        store.refreshMatrix(now: now, lastDays: Self.matrixDays) { matrix = $0; group.leave() }
+        store.refreshMatrix(now: now, lastDays: Self.matrixDays) { combined, local in
+            matrix = combined; localMatrix = local; group.leave()
+        }
 
         group.notify(queue: .main) { [weak self] in
-            self?.present(perVendor: perVendor, matrix: matrix, now: now)
+            self?.present(perVendor: perVendor, matrix: matrix, localMatrix: localMatrix, now: now)
         }
 
         // Per-machine breakdown for the by-machine view (empty when sync is off).
@@ -146,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// combined daily snapshot is the merge of the per-vendor series.
     private func present(perVendor: [String: [DailyUsage]],
                          matrix: [String: [MinuteBucket]],
+                         localMatrix: [String: [MinuteBucket]],
                          now: Date) {
         let snapshot = UsageSnapshot(days: CombinedProvider.merge(Array(perVendor.values)))
         let dashboard = Dashboard.make(from: snapshot, now: now)
@@ -167,7 +171,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let nowMinute = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
         let todayMinutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: MinuteBucket(), count: 1440)
         model.updateRate(today: todayMinutes, nowMinute: nowMinute)
-        model.updateLive(window: RateWindow.lastMinutes(matrix: matrix, now: now, count: Self.liveWindowMinutes))
+        let liveCombined = RateWindow.lastMinutes(matrix: matrix, now: now, count: Self.liveWindowMinutes)
+        let liveLocal = RateWindow.lastMinutes(matrix: localMatrix, now: now, count: Self.liveWindowMinutes)
+        model.updateLive(local: liveLocal, combined: liveCombined)
         model.cumToday = series.today
         model.cumTypical = series.typical
         model.cumPredicted = series.predicted

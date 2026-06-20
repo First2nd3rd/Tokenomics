@@ -72,7 +72,7 @@ struct UsageStoreTests {
         #expect(on["claude-native"]?.first?.inputTokens == 10)
     }
 
-    @Test("the matrix also folds in peers when enabled (views stay consistent)")
+    @Test("the matrix folds peers into combined but keeps local-only separate")
     func matrixPeerGating() {
         let folder = TestFolder()
         folder.files["tok-peer.ndjson"] = peerFile(
@@ -81,9 +81,12 @@ struct UsageStoreTests {
 
         let store = UsageStore(localProviders: local, folder: folder, machineId: "own",
                                isSyncEnabled: { true }, deliver: immediate)
-        let matrix: [String: [MinuteBucket]] = run { store.refreshMatrix(lastDays: 14, completion: $0) }
-        let tokens = matrix.values.flatMap { $0 }.reduce(0) { $0 + $1.counts.total }
-        #expect(tokens == 60)                                 // 10 local + 50 peer
+        let (combined, localMatrix): ([String: [MinuteBucket]], [String: [MinuteBucket]]) =
+            run { done in store.refreshMatrix(lastDays: 14) { c, l in done((c, l)) } }
+        let combinedTokens = combined.values.flatMap { $0 }.reduce(0) { $0 + $1.counts.total }
+        let localTokens = localMatrix.values.flatMap { $0 }.reduce(0) { $0 + $1.counts.total }
+        #expect(combinedTokens == 60)     // 10 local + 50 peer (full-day chart + cumulative)
+        #expect(localTokens == 10)        // local only — the live chart's true height
     }
 
     @Test("flushPublish writes this machine's file only when sync is enabled")

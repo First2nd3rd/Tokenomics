@@ -53,13 +53,18 @@ final class UsageStore {
         provider.fetchDailyByVendor { byVendor in self.deliver { completion(byVendor) } }
     }
 
-    /// Day→minute matrix (today + the `lastDays` prior days with data). Providers
-    /// return their full matrix; the merge happens first and the window is trimmed
-    /// once here, so it stays exact across providers.
-    func refreshMatrix(now: Date = Date(), lastDays: Int, completion: @escaping ([String: [MinuteBucket]]) -> Void) {
-        provider.fetchDayMinuteMatrix { matrix in
-            let trimmed = DayBucket.recentDays(matrix, now: now, count: lastDays)
-            self.deliver { completion(trimmed) }
+    /// Combined + local-only day→minute matrices (today + the `lastDays` prior days),
+    /// trimmed to that window. `combined` drives the full-day chart + cumulative curve;
+    /// `local` lets the live last-hour chart show this Mac at true height with a
+    /// (combined − local) peer overlay. When sync is off, `local == combined`.
+    func refreshMatrix(now: Date = Date(), lastDays: Int,
+                       completion: @escaping (_ combined: [String: [MinuteBucket]],
+                                              _ local: [String: [MinuteBucket]]) -> Void) {
+        provider.fetchRecords { records in
+            let (combined, local) = UsageAggregator.splitDayMinuteMatrix(records)
+            let c = DayBucket.recentDays(combined, now: now, count: lastDays)
+            let l = DayBucket.recentDays(local, now: now, count: lastDays)
+            self.deliver { completion(c, l) }
         }
     }
 
