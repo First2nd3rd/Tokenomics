@@ -21,6 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let popover = NSPopover()
     private let loginItem = LoginItemModel()
     private var settingsWindow: NSWindow?
+    private var reportWindow: NSWindow?
+    private lazy var reportModel = ReportModel { [weak self] period, anchor, completion in
+        guard let self else { completion(nil); return }
+        self.store.report(period: period, anchor: anchor, completion: completion)
+    }
     private var timer: Timer?
     private var lastSyncEnabled = false
     private var lastArchiveEnabled = false
@@ -44,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 model: model,
                 onRefresh: { [weak self] in self?.refresh() },
                 onSettings: { [weak self] in self?.openSettings() },
+                onReport: { [weak self] in self?.openReport() },
                 onQuit: { NSApp.terminate(nil) }
             )
         )
@@ -285,6 +291,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
+        let reportItem = NSMenuItem(title: "Reports…", action: #selector(openReport), keyEquivalent: "u")
+        reportItem.target = self
+        menu.addItem(reportItem)
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -316,5 +325,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.performClose(nil)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    // MARK: - Reports
+
+    @objc private func openReport() {
+        if reportWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 520, height: 660),
+                styleMask: [.titled, .closable],
+                backing: .buffered, defer: false
+            )
+            window.title = "Usage Report"
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: ReportView(model: reportModel))
+            window.center()
+            reportWindow = window
+        }
+        reportModel.syncOn = UserDefaults.standard.bool(forKey: "syncEnabled")
+        reportModel.reload()
+        popover.performClose(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        reportWindow?.makeKeyAndOrderFront(nil)
     }
 }

@@ -121,6 +121,23 @@ final class UsageStore {
         }
     }
 
+    /// Build a usage report for the period containing `anchor`, off the durable
+    /// archive (this Mac only). Reads on a background queue — never the refresh path —
+    /// and delivers ready for UI. nil when archiving is unavailable.
+    func report(period: ReportPeriod, anchor: Date, now: Date = Date(),
+                completion: @escaping (PeriodReport?) -> Void) {
+        guard let archive else { deliver { completion(nil) }; return }
+        DispatchQueue.global(qos: .userInitiated).async { [deliver] in
+            let range = period.range(containing: anchor)
+            let records = archive.records(forMonths: range.segmentsToRead())
+            let report = PeriodReport.make(records: records, period: period, anchor: anchor, now: now)
+            deliver { completion(report) }
+        }
+    }
+
+    /// Months ("YYYY-MM") the archive holds, ascending — bounds the report navigator.
+    func archivedMonths() -> [String] { archive?.availableMonths() ?? [] }
+
     /// One-time (idempotent) backfill of all currently-available history into the
     /// archive. No-op when archiving is off, or when already backfilled unless `force`
     /// (used when the user re-enables archiving, to fill any gap accrued while off).

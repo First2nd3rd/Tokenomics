@@ -7,6 +7,7 @@ struct DashboardView: View {
     @ObservedObject var model: DashboardModel
     var onRefresh: () -> Void
     var onSettings: () -> Void
+    var onReport: () -> Void
     var onQuit: () -> Void
 
     @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
@@ -79,6 +80,10 @@ struct DashboardView: View {
             HStack(spacing: 12) {
                 Button("Refresh", action: onRefresh)
                 Spacer()
+                Button(action: onReport) {
+                    Image(systemName: "calendar")
+                }
+                .help("Reports")
                 Button(action: onSettings) {
                     Image(systemName: "gearshape")
                 }
@@ -98,21 +103,6 @@ struct DashboardView: View {
     }
 
     // MARK: - Rate chart (intraday, smooth stack by token type)
-
-    private struct Band {
-        let name: String
-        let color: Color
-        let value: (TokenCounts) -> Int
-    }
-
-    /// Stack order (bottom → top) + colors; drives the legend and both the intraday
-    /// stacked area and the daily bars (keyed off TokenCounts so both can share it).
-    private static let bands: [Band] = [
-        Band(name: "Cache read",  color: .blue,   value: { $0.cacheRead }),
-        Band(name: "Cache write", color: .teal,   value: { $0.cacheCreation }),
-        Band(name: "Input",       color: .green,  value: { $0.input }),
-        Band(name: "Output",      color: .orange, value: { $0.output }),
-    ]
 
     private var rateTitle: String {
         if ratePage == 0 { return "Live · last hour · tokens / min" }
@@ -212,7 +202,7 @@ struct DashboardView: View {
     private func stackedRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
         Chart {
             ForEach(points) { point in
-                ForEach(Self.bands, id: \.name) { band in
+                ForEach(ChartKit.tokenBands, id: \.name) { band in
                     AreaMark(x: .value("Time", point.x), y: .value("Tokens", band.value(point.counts)))
                         .foregroundStyle(by: .value("Type", band.name))
                         .interpolationMethod(.monotone)
@@ -220,7 +210,7 @@ struct DashboardView: View {
             }
             peerOverlay(peer)
         }
-        .chartForegroundStyleScale(domain: Self.bands.map(\.name), range: Self.bands.map(\.color))
+        .chartForegroundStyleScale(domain: ChartKit.tokenBands.map(\.name), range: ChartKit.tokenBands.map(\.color))
         .chartLegend(.hidden)
         .chartXScale(domain: axis.domain)
         .chartYScale(domain: 0...rateYUpper(points, peer))
@@ -231,7 +221,7 @@ struct DashboardView: View {
 
     private var rateLegend: some View {
         HStack(spacing: 12) {
-            ForEach(Self.bands, id: \.name) { band in
+            ForEach(ChartKit.tokenBands, id: \.name) { band in
                 HStack(spacing: 4) {
                     RoundedRectangle(cornerRadius: 2).fill(band.color).frame(width: 8, height: 8)
                     Text(band.name)
@@ -319,7 +309,7 @@ struct DashboardView: View {
     private var dailyBarChart: some View {
         Chart {
             ForEach(model.dailyBars, id: \.date) { day in
-                ForEach(Self.bands, id: \.name) { band in
+                ForEach(ChartKit.tokenBands, id: \.name) { band in
                     BarMark(
                         x: .value("Day", day.date),
                         y: .value("Tokens", band.value(day.counts))
@@ -328,7 +318,7 @@ struct DashboardView: View {
                 }
             }
         }
-        .chartForegroundStyleScale(domain: Self.bands.map(\.name), range: Self.bands.map(\.color))
+        .chartForegroundStyleScale(domain: ChartKit.tokenBands.map(\.name), range: ChartKit.tokenBands.map(\.color))
         .chartLegend(.hidden)
         .chartYScale(domain: 0...dailyYUpper)
         .chartXAxis {
