@@ -81,18 +81,32 @@ enum Dedup {
     /// Collapse duplicates: among records sharing a key, keep the one with the
     /// largest output (a streamed Claude turn is logged repeatedly with a growing
     /// output; Codex's per-event records each carry a unique key, so all survive).
-    /// Keyless records can't be deduped and are kept individually. Order-independent.
-    static func collapse(_ records: [UsageRecord]) -> [UsageRecord] {
+    /// Order-independent.
+    ///
+    /// Keyless records (a Claude line with no message.id/requestId) have no stable
+    /// identity. By default they are all kept — the live path counts every one. With
+    /// `foldKeyless`, they collapse by `syntheticKey` (their event shape) instead, so
+    /// re-presenting the same keyless line is idempotent. The durable archive needs
+    /// this because a wholesale segment rewrite must not multiply keyless records.
+    static func collapse(_ records: [UsageRecord], foldKeyless: Bool = false) -> [UsageRecord] {
         var best: [String: UsageRecord] = [:]
         var keyless: [UsageRecord] = []
         for record in records {
-            if let key = record.key {
-                if let existing = best[key], existing.output >= record.output { continue }
-                best[key] = record
+            let identity = record.key ?? (foldKeyless ? syntheticKey(record) : nil)
+            if let identity {
+                if let existing = best[identity], existing.output >= record.output { continue }
+                best[identity] = record
             } else {
                 keyless.append(record)
             }
         }
         return Array(best.values) + keyless
+    }
+
+    /// Shape-based identity for a keyless record. The `"kl"` salt keeps it out of the
+    /// real-key namespace, so it can only ever fold one keyless record into another.
+    static func syntheticKey(_ r: UsageRecord) -> String {
+        key("kl", r.source.rawValue, String(r.epoch), String(r.input), String(r.output),
+            String(r.cacheCreation), String(r.cacheRead), r.model ?? "")
     }
 }

@@ -27,11 +27,7 @@ enum DeviceIdentity {
     /// App-private file holding the minted id. Lives in Application Support (not
     /// Caches), so clearing the parse cache doesn't churn the machine's identity.
     static var idFileURL: URL? {
-        guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        else { return nil }
-        let dir = support.appendingPathComponent("me.stfang.tokenomics", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("machine-id")
+        AppPaths.applicationSupport()?.appendingPathComponent("machine-id")
     }
 
     /// Read the id from `url`, minting + writing a fresh UUID if it's absent or empty.

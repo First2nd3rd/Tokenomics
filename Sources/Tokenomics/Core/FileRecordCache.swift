@@ -89,11 +89,7 @@ final class FileRecordCache<Record: Codable> {
     }
 
     private var diskURL: URL? {
-        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        else { return nil }
-        let dir = caches.appendingPathComponent("me.stfang.tokenomics", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent(diskFileName)
+        AppPaths.caches()?.appendingPathComponent(diskFileName)
     }
 
     private func loadDisk() -> [String: Cached]? {
