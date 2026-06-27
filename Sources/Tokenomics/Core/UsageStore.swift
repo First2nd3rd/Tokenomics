@@ -26,6 +26,7 @@ final class UsageStore {
     private let peerSource: PeerRecordSource
     private let publisher: PeerPublisher
     private let archive: UsageArchive?
+    private let snapshots: SnapshotStore?
     private let machineId: String
     private let isSyncEnabled: () -> Bool
     private let isArchiveEnabled: () -> Bool
@@ -34,6 +35,7 @@ final class UsageStore {
     init(localProviders: [UsageProvider] = [ClaudeNativeProvider(), CodexProvider()],
          folder: PeerFolder = ICloudDriveFolder(),
          archive: UsageArchive? = LocalArchiveFolder().map { UsageArchive(folder: $0) },
+         snapshots: SnapshotStore? = SnapshotStore(),
          machineId: String = DeviceIdentity.id,
          isSyncEnabled: @escaping () -> Bool = { UserDefaults.standard.bool(forKey: "syncEnabled") },
          isArchiveEnabled: @escaping () -> Bool = { UserDefaults.standard.bool(forKey: "archiveEnabled") },
@@ -42,6 +44,7 @@ final class UsageStore {
         self.peerSource = PeerRecordSource(folder: folder, ownMachineId: machineId)
         self.publisher = PeerPublisher(folder: folder, machineId: machineId)
         self.archive = archive
+        self.snapshots = snapshots
         self.machineId = machineId
         self.isSyncEnabled = isSyncEnabled
         self.isArchiveEnabled = isArchiveEnabled
@@ -121,17 +124,37 @@ final class UsageStore {
         }
     }
 
-    /// Build a usage report for the period containing `anchor`, off the durable
-    /// archive (this Mac only). Reads on a background queue — never the refresh path —
-    /// and delivers ready for UI. nil when archiving is unavailable.
+    /// Build a usage report for the period containing `anchor` (this Mac only). Uses
+    /// frozen daily snapshots for completed days (stable historical cost) and the raw
+    /// archive for today plus any day a snapshot doesn't cover yet (live cost). Reads
+    /// on a background queue — never the refresh path — and delivers ready for UI.
+    /// nil when archiving is unavailable.
     func report(period: ReportPeriod, anchor: Date, now: Date = Date(),
                 completion: @escaping (PeriodReport?) -> Void) {
         guard let archive else { deliver { completion(nil) }; return }
+        let snapshots = self.snapshots
         DispatchQueue.global(qos: .userInitiated).async { [deliver] in
+            let todayKey = DayBucket.dayKey(now)
+            // Frozen completed days from snapshots; never use a snapshot for today.
+            let frozen = (snapshots?.snapshots() ?? []).filter { $0.date < todayKey }
+            let have = Set(frozen.map(\.date))
+            // Live days for today + anything not yet snapshotted, from the raw archive.
             let range = period.range(containing: anchor)
-            let records = archive.records(forMonths: range.segmentsToRead())
-            let report = PeriodReport.make(records: records, period: period, anchor: anchor, now: now)
+            let live = UsageAggregator
+                .daySummaries(archive.records(forMonths: range.segmentsToRead()),
+                              pricedAt: Int(now.timeIntervalSince1970), frozen: false)
+                .filter { !have.contains($0.date) }
+            let report = PeriodReport.make(daySummaries: frozen + live, period: period, anchor: anchor, now: now)
             deliver { completion(report) }
+        }
+    }
+
+    /// Freeze finalized days into the snapshot store (cheap, off-thread; one real
+    /// sweep per calendar day). No-op when archiving is off or unavailable.
+    func refreshSnapshots(now: Date = Date()) {
+        guard isArchiveEnabled(), let archive, let snapshots else { return }
+        DispatchQueue.global(qos: .utility).async {
+            snapshots.refresh(now: now, archive: archive)
         }
     }
 

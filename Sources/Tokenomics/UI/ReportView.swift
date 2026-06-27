@@ -107,7 +107,7 @@ struct ReportView: View {
                 Text("This Mac only — excludes the other Macs shown on the dashboard.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
-            if !r.isCurrent {
+            if !r.pricesFrozen {
                 Text("Costs estimated at current prices.")
                     .font(.caption2).foregroundStyle(.secondary)
             }

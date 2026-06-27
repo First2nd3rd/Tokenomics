@@ -143,6 +143,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // archive — one shared fetch; each half no-ops when its feature is off or
         // nothing changed.
         store.persistLocal()
+
+        // Freeze any newly-finalized day into the snapshot store (guarded to one real
+        // sweep per day; catches the midnight rollover during a long-running session).
+        store.refreshSnapshots(now: now)
     }
 
     /// Flush a final publish + archive on quit so the last bit of usage is preserved
