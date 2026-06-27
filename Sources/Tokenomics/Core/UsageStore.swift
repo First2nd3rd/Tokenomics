@@ -121,6 +121,16 @@ final class UsageStore {
         }
     }
 
+    /// One-time (idempotent) backfill of all currently-available history into the
+    /// archive. No-op when archiving is off, or when already backfilled unless `force`
+    /// (used when the user re-enables archiving, to fill any gap accrued while off).
+    func backfillArchiveIfNeeded(force: Bool = false) {
+        guard isArchiveEnabled(), let archive, force || !archive.isBackfilled else { return }
+        CombinedProvider(localProviders).fetchRecords { records in
+            archive.backfill(records)
+        }
+    }
+
     /// Best-effort synchronous publish + archive for app termination, bounded by
     /// `timeout` so quitting is never blocked for long.
     func flushLocal(timeout: TimeInterval = 2) {

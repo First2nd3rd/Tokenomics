@@ -7,6 +7,7 @@ import Foundation
 final class MemoryArchiveFolder: ArchiveFolder {
     var directoryURL: URL? = URL(fileURLWithPath: "/archive")
     var files: [String: Data] = [:]
+    var meta: Data?
     private(set) var writeCount = 0
 
     func segmentURLs() -> [URL] {
@@ -20,6 +21,8 @@ final class MemoryArchiveFolder: ArchiveFolder {
         files[archiveSegmentName(forMonth: month)] = data
         writeCount += 1
     }
+    func readMeta() -> Data? { meta }
+    func writeMeta(_ data: Data) throws { meta = data }
 }
 
 @Suite("ArchiveIngest")
@@ -118,5 +121,38 @@ struct ArchiveIngestTests {
         archive(folder).ingest([], now: clock)
         #expect(folder.writeCount == 0)
         #expect(folder.files.isEmpty)
+    }
+
+    // MARK: - Backfill
+
+    @Test("backfill captures every month in the corpus, not just the recent window")
+    func backfillCapturesAllMonths() {
+        let folder = MemoryArchiveFolder()
+        let a = archive(folder)
+        // Spans this month, last month, and two months back — the last is OUT of the
+        // steady-ingest window but backfill must still capture it.
+        a.backfill([rec("now", daysAgo: 0), rec("prev", daysAgo: 30), rec("old", daysAgo: 60)])
+        #expect(a.availableMonths().count == 3)
+        #expect(Set(a.records(forMonths: a.availableMonths()).map(\.key)) == ["now", "prev", "old"])
+    }
+
+    @Test("backfill marks the archive backfilled")
+    func backfillSetsFlag() {
+        let folder = MemoryArchiveFolder()
+        let a = archive(folder)
+        #expect(a.isBackfilled == false)
+        a.backfill([rec("A", output: 1)])
+        #expect(a.isBackfilled == true)
+    }
+
+    @Test("re-running backfill rewrites no segments")
+    func backfillIdempotent() {
+        let folder = MemoryArchiveFolder()
+        let a = archive(folder)
+        let corpus = [rec("now", daysAgo: 0), rec("old", daysAgo: 60)]
+        a.backfill(corpus)
+        let writes = folder.writeCount
+        a.backfill(corpus)
+        #expect(folder.writeCount == writes)   // unchanged segments are not rewritten
     }
 }

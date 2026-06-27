@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     private var timer: Timer?
     private var lastSyncEnabled = false
+    private var lastArchiveEnabled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Default Custom-plan fees so the engine (raw UserDefaults) and the Settings
@@ -33,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "archiveEnabled": true,
         ])
         lastSyncEnabled = UserDefaults.standard.bool(forKey: "syncEnabled")
+        lastArchiveEnabled = UserDefaults.standard.bool(forKey: "archiveEnabled")
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -62,9 +64,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             self?.applyMenuBarIcon()
             self?.syncSettingChanged()
+            self?.archiveSettingChanged()
         }
 
         refresh()
+        // Seed the durable archive from history already on disk (once; re-runnable),
+        // so reports cover the past, not just usage from this launch onward.
+        store.backfillArchiveIfNeeded()
         timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
@@ -145,6 +151,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let enabled = UserDefaults.standard.bool(forKey: "syncEnabled")
         if lastSyncEnabled && !enabled { store.retractOwnFile() }
         lastSyncEnabled = enabled
+    }
+
+    /// React to the archive toggle: when it flips ON, backfill any history accrued
+    /// while it was off. Turning it off just stops ingesting — the archive is kept.
+    private func archiveSettingChanged() {
+        let enabled = UserDefaults.standard.bool(forKey: "archiveEnabled")
+        if enabled && !lastArchiveEnabled { store.backfillArchiveIfNeeded(force: true) }
+        lastArchiveEnabled = enabled
     }
 
     /// Push one fully-assembled refresh into the view model (main queue). The
@@ -288,7 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 380, height: 560),
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 640),
                 styleMask: [.titled, .closable],
                 backing: .buffered, defer: false
             )

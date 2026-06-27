@@ -48,6 +48,7 @@ struct SettingsView: View {
     @AppStorage(CostBasisStore.gptCustomKey) private var gptCustomFee: Double = 20
     @AppStorage("syncEnabled") private var syncEnabled = false
     @AppStorage(DeviceIdentity.displayNameKey) private var machineName = ""
+    @AppStorage("archiveEnabled") private var archiveEnabled = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -113,6 +114,19 @@ struct SettingsView: View {
             }
 
             Divider().padding(.vertical, 2)
+            Text("History archive")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            row("Keep a usage history",
+                subtitle: "Preserve a permanent daily/monthly history on this Mac so reports survive Claude clearing its logs. Only token counts are stored — never prompts, file paths, or keys — in Application Support, about 5 MB per month.") {
+                Toggle("", isOn: $archiveEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+            }
+
+            Divider().padding(.vertical, 2)
             Text("Subscription — for break-even")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -132,7 +146,7 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 380, height: 560, alignment: .topLeading)
+        .frame(width: 380, height: 640, alignment: .topLeading)
         .onAppear { login.refresh() }
     }
 

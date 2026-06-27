@@ -17,6 +17,11 @@ protocol ArchiveFolder {
     /// Atomically (re)write one month's whole segment (temp file + rename). A crash
     /// can only damage the temp file; the previously-good segment is never torn.
     func writeSegment(_ data: Data, month: String) throws
+
+    /// Read/write a tiny sidecar holding archive-wide state (e.g. backfill done).
+    /// Rebuildable from the segments, so losing it just re-runs backfill.
+    func readMeta() -> Data?
+    func writeMeta(_ data: Data) throws
 }
 
 /// Segment file name for a month key ("YYYY-MM"), e.g. "archive-2026-06.ndjson".
@@ -58,5 +63,14 @@ struct LocalArchiveFolder: ArchiveFolder {
     func writeSegment(_ data: Data, month: String) throws {
         guard let dir = directoryURL else { throw CocoaError(.fileNoSuchFile) }
         try data.write(to: dir.appendingPathComponent(archiveSegmentName(forMonth: month)), options: .atomic)
+    }
+
+    private var metaURL: URL? { directoryURL?.appendingPathComponent("archive-meta.json") }
+
+    func readMeta() -> Data? { metaURL.flatMap { try? Data(contentsOf: $0) } }
+
+    func writeMeta(_ data: Data) throws {
+        guard let url = metaURL else { throw CocoaError(.fileNoSuchFile) }
+        try data.write(to: url, options: .atomic)
     }
 }

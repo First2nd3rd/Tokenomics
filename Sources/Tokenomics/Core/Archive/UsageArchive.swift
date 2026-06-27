@@ -57,6 +57,40 @@ final class UsageArchive {
         return contents.records
     }
 
+    // MARK: - Backfill
+
+    /// Tiny persisted archive-wide state. Rebuildable from the segments, so a loss
+    /// just re-runs backfill.
+    struct Meta: Codable {
+        var schemaMajor: Int
+        var backfillComplete: Bool
+    }
+
+    /// Whether the one-time backfill of pre-existing history has completed.
+    var isBackfilled: Bool {
+        guard let data = folder.readMeta(),
+              let meta = try? JSONDecoder().decode(Meta.self, from: data) else { return false }
+        return meta.backfillComplete
+    }
+
+    /// Seed the archive from all currently-available history (the full local corpus),
+    /// across EVERY month it spans — unlike steady ingest, which only touches the
+    /// recent window. Idempotent: re-running rewrites only changed segments. Used on
+    /// first run and whenever archiving is re-enabled, to fill any gap.
+    func backfill(_ rawRecords: [UsageRecord]) {
+        queue.sync {
+            var byMonth: [String: [UsageRecord]] = [:]
+            for record in Dedup.collapse(rawRecords, foldKeyless: true) {
+                byMonth[DayBucket.month(epoch: record.epoch), default: []].append(record)
+            }
+            for (month, records) in byMonth {
+                writeMerged(records, into: month)
+            }
+            let meta = Meta(schemaMajor: ArchiveFile.schemaMajor, backfillComplete: true)
+            if let data = try? JSONEncoder().encode(meta) { try? folder.writeMeta(data) }
+        }
+    }
+
     // MARK: - Ingest
 
     /// Fold this machine's freshly-parsed records into the archive. Idempotent: the

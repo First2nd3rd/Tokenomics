@@ -41,6 +41,7 @@ struct UsageStoreTests {
         return out
     }
 
+
     private func record(_ source: UsageSource, key: String, input: Int) -> UsageRecord {
         UsageRecord(source: source, key: key, epoch: Int(Date().timeIntervalSince1970),
                     input: input, output: 0, cacheCreation: 0, cacheRead: 0, model: "m")
