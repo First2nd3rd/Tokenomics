@@ -14,6 +14,10 @@ if CommandLine.arguments.contains("--dump-peers") {
     DumpPeers.run()
     exit(0)
 }
+if CommandLine.arguments.contains("--dump-archive") {
+    DumpArchive.run()
+    exit(0)
+}
 if CommandLine.arguments.contains("--dump-intraday") {
     DumpIntraday.run()
     exit(0)

@@ -1,10 +1,12 @@
 import SwiftUI
+import AppKit
 
 /// The report window: a day / week / month usage breakdown read from the durable
 /// archive. This Mac only (see the note when sync is on). Presentation only — every
 /// figure comes from `PeriodReport`.
 struct ReportView: View {
     @ObservedObject var model: ReportModel
+    @State private var copied = false
 
     private let width: CGFloat = 520
     private var chartWidth: CGFloat { width - 40 }
@@ -26,6 +28,7 @@ struct ReportView: View {
         }
         .frame(width: width, height: 660)
         .onAppear { if model.report == nil { model.reload() } }
+        .onChange(of: model.report?.key) { _, _ in copied = false }
     }
 
     // MARK: - Header (granularity picker + period navigator)
@@ -64,6 +67,18 @@ struct ReportView: View {
         if !r.byVendor.isEmpty { section("By vendor") { vendorRows(r) } }
         if !r.byModel.isEmpty { section("By model") { modelRows(r) } }
         section("Stats") { statsGrid(r) }
+        HStack {
+            Button(copied ? "Copied ✓" : "Copy as Markdown") { copyMarkdown(r) }
+                .controlSize(.small)
+            Spacer()
+        }
+        .padding(.top, 4)
+    }
+
+    private func copyMarkdown(_ r: PeriodReport) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(ReportMarkdown.make(r, syncOn: model.syncOn), forType: .string)
+        copied = true
     }
 
     private func headline(_ r: PeriodReport) -> some View {

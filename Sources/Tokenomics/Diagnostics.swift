@@ -112,6 +112,46 @@ enum DumpPeers {
     }
 }
 
+/// Inspects the durable archive: each month segment's manifest + record count, the
+/// backfill flag, and a Markdown report for the current month. Invoked with
+/// `--dump-archive`. Run from the app's bundle (it owns the Application Support dir).
+enum DumpArchive {
+    static func run() {
+        guard let folder = LocalArchiveFolder() else {
+            print("archive directory unavailable (Application Support unreachable)")
+            return
+        }
+        let archive = UsageArchive(folder: folder)
+        print("archive dir: \(folder.directoryURL?.path ?? "nil")")
+        print("backfilled:  \(archive.isBackfilled)")
+        let months = archive.availableMonths()
+        print("segments:    \(months.count)\n")
+
+        for month in months {
+            guard let dir = folder.directoryURL,
+                  let data = folder.readData(at: dir.appendingPathComponent(archiveSegmentName(forMonth: month))),
+                  let contents = ArchiveFile.decode(data) else {
+                print("===== \(month) =====\n  [unreadable]\n")
+                continue
+            }
+            let m = contents.manifest
+            print("===== \(month) =====")
+            print("  bytes:        \(data.count)")
+            print("  schema:       \(m.schemaVersion)")
+            print("  recordCount:  manifest=\(m.recordCount)  actual=\(contents.records.count)  \(m.recordCount == contents.records.count ? "✓" : "✗ MISMATCH")")
+            print("  updatedAt:    \(Date(timeIntervalSince1970: TimeInterval(m.updatedAt)))")
+            print("")
+        }
+
+        let now = Date()
+        let range = ReportPeriod.month.range(containing: now)
+        let report = PeriodReport.make(records: archive.records(forMonths: range.segmentsToRead()),
+                                       period: .month, anchor: now, now: now)
+        print("----- current month report -----")
+        print(ReportMarkdown.make(report))
+    }
+}
+
 /// Prints today's non-empty 5-minute token buckets (combined Claude+Codex) plus a
 /// TOTAL, to sanity-check the intraday rate chart. Invoked with `--dump-intraday`.
 enum DumpIntraday {

@@ -30,8 +30,15 @@ a small parse cache. Per-day token and cost totals are verified to match
   - **Subscription break-even** — per vendor (Claude, GPT), a progress bar to
     break-even plus the multiple already earned back this month (e.g. `7.8×`),
     month-to-date API-equivalent cost vs your plan's fee, and the day it broke even.
-- **Settings** — Launch at Login, rate-chart style, and a per-vendor plan picker
-  (preset tiers, a custom monthly amount, or API pay-as-you-go).
+- **Reports** — a Day / Week / Month report window (calendar icon, or right-click →
+  Reports…): the period's total tokens & cost, the change vs the previous period, an
+  end-of-period projection while in progress, a daily stacked-bar chart, per-vendor
+  and per-model breakdowns, active-day / busiest-day / streak stats, and
+  copy-as-Markdown.
+- **Durable history** — usage is archived locally so reports keep working after
+  Claude clears its logs (Settings → *Keep a usage history*; on by default).
+- **Settings** — Launch at Login, rate-chart style, history archive, and a per-vendor
+  plan picker (preset tiers, a custom monthly amount, or API pay-as-you-go).
 - **Sources** — Claude Code and Codex, merged. Cost is always the **API-equivalent**
   amount (LiteLLM prices), so it's meaningful whether you're on a subscription or API.
 
@@ -47,6 +54,14 @@ Parsing is incremental: each file's parsed records are cached by `(mtime, size)`
 and persisted as NDJSON under `~/Library/Caches/me.stfang.tokenomics/`, so only
 changed log files are re-read on each refresh.
 
+That cache is a *mirror* of the current logs — it drops records once Claude rotates
+a file away. A separate **durable archive** keeps every record it has seen, in
+month-segmented NDJSON under `~/Library/Application Support/me.stfang.tokenomics/`
+(survives a Caches purge), so reports stay correct long after the source logs are
+gone. Ingest is idempotent (collapse + whole-segment atomic rewrite), only token
+counts are stored — never prompts, paths, or keys — and it's ~5 MB/month. Toggle it
+in Settings (on by default).
+
 ## Architecture
 
 The compute core is pure and decoupled from presentation, so every surface (menu
@@ -58,13 +73,15 @@ Sources/Tokenomics/
 │   ├── UsageProvider     # protocol: fetchDaily / fetchDailyByVendor / fetchDayMinuteMatrix
 │   ├── ClaudeNativeProvider, CodexProvider, CombinedProvider
 │   ├── FileRecordCache   # generic (mtime,size) parse cache + NDJSON persistence
+│   ├── Archive/          # durable per-record archive: ArchiveFile, ArchiveStore, UsageArchive
 │   ├── LineReader        # O(n) streaming JSONL reader (handles multi-MB lines)
 │   ├── Pricing / PricingStore
 │   ├── Dashboard         # headline / recent-average
 │   ├── IntradayCurve     # typical-shape model + end-of-day projection
+│   ├── ReportPeriod / PeriodReport / ReportMarkdown   # day/week/month reports
 │   ├── BreakEven / CostBasis
 │   ├── DayBucket, TokenCounts, Format, UsageStore
-├── UI/                   # SwiftUI views + view model (DashboardView, SettingsView, …)
+├── UI/                   # SwiftUI views + view model (DashboardView, ReportView, SettingsView, ChartKit, …)
 ├── AppDelegate.swift     # NSStatusItem, popover, refresh orchestration
 └── main.swift            # .accessory app entry + diagnostic flags
 ```
@@ -102,10 +119,11 @@ registers via `SMAppService`; the app must live in a stable location such as
 swift test
 ```
 
-A [swift-testing](https://github.com/swiftlang/swift-testing) suite (108 tests)
+A [swift-testing](https://github.com/swiftlang/swift-testing) suite (223 tests)
 covers the Core engine with deterministic, timezone-independent inputs: the
 projection math, break-even, the day-window trimming, the dedup-aware merge, the
-parse cache (hit/miss + NDJSON round-trip), and the formatters.
+parse cache (hit/miss + NDJSON round-trip), the durable archive (format, idempotent
+ingest, backfill), the day/week/month report aggregation, and the formatters.
 
 ## Diagnostics
 
@@ -117,6 +135,8 @@ The binary exits early on these flags (used to verify the readers and profile):
 | `--dump-codex` | Codex per-day token + cost TSV |
 | `--dump-intraday` | Today's non-empty 5-minute buckets (combined) |
 | `--dump-curve` | Today / typical / projected end-of-day summary |
+| `--dump-peers` | Each iCloud peer file's manifest + a structure check |
+| `--dump-archive` | Each archive segment's manifest + a current-month Markdown report |
 | `--scan-only` | Stream every Claude line without decoding (isolates reader memory) |
 | `--bench` | Times a cold vs warm read on one provider |
 
@@ -139,6 +159,8 @@ Steady state ≈ **56 MB** memory (Activity Monitor) and **~0% CPU** while idle
 - [x] Cumulative typical-shape projection
 - [x] Daily stacked-by-type bar chart
 - [x] Per-vendor subscription break-even
+- [x] Durable usage archive (survives Claude's log rotation)
+- [x] Day / week / month report window with Markdown export
 - [x] Core unit-test suite (swift-testing)
 - [ ] Parser fixture tests (lock the dedup / fast / delta rules under `swift test`)
 - [ ] Configurable refresh interval

@@ -157,4 +157,23 @@ struct PeriodReportTests {
                                   now: date(2026, 7, 1), calendar: cal)
         #expect((r.byModel.first?.cost ?? 0) > 0)
     }
+
+    @Test("Markdown export carries the title, sections, and a vendor row")
+    func markdownExport() {
+        let records = [
+            rec(.claude, key: "a", tokens: 100, model: "claude-opus-4-8", 2026, 6, 1),
+            rec(.codex, key: "x", tokens: 60, model: "gpt-5.5", 2026, 6, 2),
+        ]
+        let r = PeriodReport.make(records: records, period: .month, anchor: date(2026, 6, 15),
+                                  now: date(2026, 7, 1), calendar: cal)
+        let md = ReportMarkdown.make(r, syncOn: true)
+        #expect(md.contains("# Usage Report — June 2026"))
+        #expect(md.contains("## By vendor"))
+        #expect(md.contains("| Claude |"))
+        #expect(md.contains("## By model"))
+        #expect(md.contains("## Stats"))
+        #expect(md.contains("Active days: 2 of 30"))
+        #expect(md.contains("excludes other Macs"))      // sync note
+        #expect(md.contains("estimated at current prices")) // completed month
+    }
 }
