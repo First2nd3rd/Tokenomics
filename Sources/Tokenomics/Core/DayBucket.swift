@@ -33,6 +33,17 @@ enum DayBucket {
         dayKey(Date(timeIntervalSince1970: TimeInterval(epoch)), calendar: calendar)
     }
 
+    /// Local calendar-month key like "2026-06" for a `Date`.
+    static func monthKey(_ date: Date, calendar: Calendar = .current) -> String {
+        let c = calendar.dateComponents([.year, .month], from: date)
+        return String(format: "%04d-%02d", c.year ?? 0, c.month ?? 0)
+    }
+
+    /// Local month key for a UTC epoch (seconds), under `calendar`'s timezone.
+    static func month(epoch: Int, calendar: Calendar = .current) -> String {
+        monthKey(Date(timeIntervalSince1970: TimeInterval(epoch)), calendar: calendar)
+    }
+
     /// Local day key + minute-of-day (0…1439) for a UTC epoch, under `calendar`.
     /// Computed fresh each call so it tracks the current timezone.
     static func dayMinute(epoch: Int, calendar: Calendar = .current) -> (day: String, minute: Int) {

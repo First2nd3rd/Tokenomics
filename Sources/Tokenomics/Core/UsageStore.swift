@@ -25,20 +25,26 @@ final class UsageStore {
     private let localProviders: [UsageProvider]
     private let peerSource: PeerRecordSource
     private let publisher: PeerPublisher
+    private let archive: UsageArchive?
     private let machineId: String
     private let isSyncEnabled: () -> Bool
+    private let isArchiveEnabled: () -> Bool
     private let deliver: (@escaping () -> Void) -> Void
 
     init(localProviders: [UsageProvider] = [ClaudeNativeProvider(), CodexProvider()],
          folder: PeerFolder = ICloudDriveFolder(),
+         archive: UsageArchive? = LocalArchiveFolder().map { UsageArchive(folder: $0) },
          machineId: String = DeviceIdentity.id,
          isSyncEnabled: @escaping () -> Bool = { UserDefaults.standard.bool(forKey: "syncEnabled") },
+         isArchiveEnabled: @escaping () -> Bool = { UserDefaults.standard.bool(forKey: "archiveEnabled") },
          deliver: @escaping (@escaping () -> Void) -> Void = { work in DispatchQueue.main.async(execute: work) }) {
         self.localProviders = localProviders
         self.peerSource = PeerRecordSource(folder: folder, ownMachineId: machineId)
         self.publisher = PeerPublisher(folder: folder, machineId: machineId)
+        self.archive = archive
         self.machineId = machineId
         self.isSyncEnabled = isSyncEnabled
+        self.isArchiveEnabled = isArchiveEnabled
         self.deliver = deliver
     }
 
@@ -99,6 +105,35 @@ final class UsageStore {
         CombinedProvider(localProviders).fetchRecords { [publisher] records in
             publisher.publishIfNeeded(localRecords: records)
         }
+    }
+
+    /// Fetch this machine's local records ONCE per refresh and fan them to both the
+    /// peer publisher and the durable archive — each a no-op when its feature is off
+    /// or nothing changed. Sharing one fetch avoids scanning the logs twice per tick.
+    func persistLocal() {
+        let wantPublish = isSyncEnabled()
+        let wantArchive = isArchiveEnabled()
+        guard wantPublish || wantArchive else { return }
+        CombinedProvider(localProviders).fetchRecords { [weak self] records in
+            guard let self else { return }
+            if wantPublish { self.publisher.publishIfNeeded(localRecords: records) }
+            if wantArchive { self.archive?.ingest(records) }
+        }
+    }
+
+    /// Best-effort synchronous publish + archive for app termination, bounded by
+    /// `timeout` so quitting is never blocked for long.
+    func flushLocal(timeout: TimeInterval = 2) {
+        let wantPublish = isSyncEnabled()
+        let wantArchive = isArchiveEnabled()
+        guard wantPublish || wantArchive else { return }
+        let semaphore = DispatchSemaphore(value: 0)
+        CombinedProvider(localProviders).fetchRecords { [weak self] records in
+            if wantPublish { self?.publisher.publishIfNeeded(localRecords: records, force: true) }
+            if wantArchive { self?.archive?.ingest(records) }
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + timeout)
     }
 
     /// Stop participating: delete this machine's published file so peers no longer

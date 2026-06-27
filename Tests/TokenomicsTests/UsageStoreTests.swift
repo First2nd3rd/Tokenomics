@@ -147,6 +147,30 @@ struct UsageStoreTests {
         #expect(folder.files["tok-own.ndjson"] == nil)        // peers will drop this Mac next cycle
     }
 
+    @Test("persistLocal folds local records into the archive when archiving is on")
+    func persistLocalArchives() {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: TestFolder(), archive: archive,
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { true },
+                               deliver: immediate)
+        store.flushLocal()   // synchronous
+        #expect(archive.allRecords().contains { $0.key == "L" })
+    }
+
+    @Test("persistLocal writes nothing to the archive when archiving is off")
+    func persistLocalArchiveGating() {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: TestFolder(), archive: archive,
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { false },
+                               deliver: immediate)
+        store.flushLocal()
+        #expect(af.files.isEmpty)
+    }
+
     @Test("the published file contains only this machine's records, not peers'")
     func publishesOwnRecordsOnly() throws {
         let folder = TestFolder()

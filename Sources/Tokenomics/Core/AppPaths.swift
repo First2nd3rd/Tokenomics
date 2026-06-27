@@ -7,6 +7,11 @@ enum AppPaths {
     /// Reverse-DNS app id; the subdirectory name under Caches / Application Support.
     static let bundleID = "me.stfang.tokenomics"
 
+    /// The app's short version string ("0" under `swift run` / tests, no Info.plist).
+    static var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+    }
+
     /// `~/Library/Caches/me.stfang.tokenomics[/sub]`, created on demand. The OS may
     /// purge this under disk pressure — only for regenerable data (the parse cache).
     static func caches(_ subdirectory: String? = nil) -> URL? {

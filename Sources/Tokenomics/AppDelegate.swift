@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.register(defaults: [
             CostBasisStore.claudeCustomKey: 100,
             CostBasisStore.gptCustomKey: 20,
+            "archiveEnabled": true,
         ])
         lastSyncEnabled = UserDefaults.standard.bool(forKey: "syncEnabled")
 
@@ -126,15 +127,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Per-machine breakdown for the by-machine view (empty when sync is off).
         store.refreshMachines(now: now) { [weak self] in self?.model.machines = $0 }
 
-        // Publish this machine's records for other Macs (no-op when sync is off or
-        // nothing changed since the last publish).
-        store.publishIfNeeded()
+        // Publish this machine's records for other Macs and fold them into the durable
+        // archive — one shared fetch; each half no-ops when its feature is off or
+        // nothing changed.
+        store.persistLocal()
     }
 
-    /// Flush a final publish on quit so the last bit of usage reaches other Macs
-    /// (no-op when sync is off or nothing changed).
+    /// Flush a final publish + archive on quit so the last bit of usage is preserved
+    /// (no-op when both features are off or nothing changed).
     func applicationWillTerminate(_ notification: Notification) {
-        store.flushPublish()
+        store.flushLocal()
     }
 
     /// React to the sync toggle: when it flips OFF, retract this Mac's published file
