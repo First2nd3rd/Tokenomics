@@ -59,13 +59,13 @@ struct DashboardTests {
 
         // Assert
         let headline = try #require(dashboard.headline)
-        #expect(dashboard.isToday == true)
+        #expect(dashboard.hasUsageToday == true)
         #expect(headline.date == "2026-06-07")
         #expect(headline.totalTokens == 300)
     }
 
-    @Test("headline falls back to most-recent day and isToday is false when today is absent")
-    func headlineFallsBackWhenTodayAbsent() throws {
+    @Test("headline is a zero today and lastActive is the most recent prior day when today is absent")
+    func headlineZeroWhenTodayAbsent() throws {
         // Arrange
         let cal = Self.utcCalendar()
         let now = Self.date(cal, year: 2026, month: 6, day: 7)
@@ -79,11 +79,13 @@ struct DashboardTests {
         // Act
         let dashboard = Dashboard.make(from: snapshot, now: now, calendar: cal)
 
-        // Assert
+        // Assert: the headline is today (synthesized zero), not yesterday.
         let headline = try #require(dashboard.headline)
-        #expect(dashboard.isToday == false)
-        #expect(headline.date == "2026-06-06") // most recent day
-        #expect(headline.totalTokens == 250)
+        #expect(dashboard.hasUsageToday == false)
+        #expect(headline.date == "2026-06-07")
+        #expect(headline.totalTokens == 0)
+        #expect(dashboard.lastActive?.date == "2026-06-06")    // context for "last active …"
+        #expect(dashboard.lastActive?.totalTokens == 250)
     }
 
     @Test("headline is nil when the snapshot has no days")
@@ -97,8 +99,9 @@ struct DashboardTests {
         let dashboard = Dashboard.make(from: snapshot, now: now, calendar: cal)
 
         // Assert
-        #expect(dashboard.isToday == false)
+        #expect(dashboard.hasUsageToday == false)
         #expect(dashboard.headline == nil)
+        #expect(dashboard.lastActive == nil)
         #expect(dashboard.avgTokens == nil)
     }
 
@@ -122,7 +125,7 @@ struct DashboardTests {
         let dashboard = Dashboard.make(from: snapshot, now: now, calendar: cal)
 
         // Assert
-        #expect(dashboard.isToday == true)
+        #expect(dashboard.hasUsageToday == true)
         #expect(dashboard.avgTokens == 200)
     }
 
@@ -151,7 +154,7 @@ struct DashboardTests {
         let dashboard = Dashboard.make(from: snapshot, now: now, calendar: cal)
 
         // Assert
-        #expect(dashboard.isToday == true)
+        #expect(dashboard.hasUsageToday == true)
         // (600+700+800+900+1000+1100+1200) / 7 = 6300 / 7 = 900
         #expect(dashboard.avgTokens == 900)
     }
@@ -169,31 +172,31 @@ struct DashboardTests {
         let dashboard = Dashboard.make(from: snapshot, now: now, calendar: cal)
 
         // Assert
-        #expect(dashboard.isToday == true)
+        #expect(dashboard.hasUsageToday == true)
         #expect(dashboard.avgTokens == nil)
     }
 
-    @Test("avgTokens excludes the most-recent day when it is the fallback headline")
-    func avgExcludesFallbackHeadline() {
+    @Test("avgTokens excludes only today, including the most recent completed day")
+    func avgIncludesRecentCompletedDay() {
         // Arrange
         let cal = Self.utcCalendar()
         let now = Self.date(cal, year: 2026, month: 6, day: 7)
-        // Today (2026-06-07) is absent, so the fallback headline is 2026-06-06.
-        // That day must still be excluded from the average: mean of 100 and 300.
+        // Today (2026-06-07) is empty; the recent average covers the completed days
+        // 06-04..06-06, which now includes the most recent one (06-06).
         let snapshot = UsageSnapshot(days: [
             Self.usage("2026-06-04", totalTokens: 100),
             Self.usage("2026-06-05", totalTokens: 300),
-            Self.usage("2026-06-06", totalTokens: 5000), // fallback headline, excluded
+            Self.usage("2026-06-06", totalTokens: 5000),
         ])
 
         // Act
         let dashboard = Dashboard.make(from: snapshot, now: now, calendar: cal)
 
         // Assert
-        let headline = dashboard.headline
-        #expect(dashboard.isToday == false)
-        #expect(headline?.date == "2026-06-06")
-        // (100 + 300) / 2 = 200
-        #expect(dashboard.avgTokens == 200)
+        #expect(dashboard.hasUsageToday == false)
+        #expect(dashboard.headline?.date == "2026-06-07")     // today, zero
+        #expect(dashboard.lastActive?.date == "2026-06-06")
+        // today excluded; (100 + 300 + 5000) / 3 = 1800
+        #expect(dashboard.avgTokens == 1800)
     }
 }

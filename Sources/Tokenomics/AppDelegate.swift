@@ -193,7 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static func statusTitle(_ d: Dashboard, series: IntradayCurve.Series) -> String {
         guard let h = d.headline else { return " —" }
         var title = " " + Format.tokensShort(h.totalTokens)
-        if d.isToday, let projected = series.projectedTotal, let avg = d.avgTokens, avg > 0 {
+        if d.hasUsageToday, let projected = series.projectedTotal, let avg = d.avgTokens, avg > 0 {
             title += projected >= avg ? " ▲" : " ▼"
         }
         return title
@@ -208,8 +208,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the same value the popover's projected line ends at. Cost is scaled by the
     /// same token multiplier so the two figures stay consistent.
     private static func subtitleText(_ d: Dashboard, series: IntradayCurve.Series) -> String {
-        guard d.isToday else {
-            return d.headline.map { "Showing \($0.date)" } ?? ""
+        guard d.hasUsageToday else {
+            guard let la = d.lastActive else { return "No usage yet today" }
+            return "No usage yet today · last active \(Format.shortMonthDay(la.date)): "
+                + "\(Format.tokensShort(la.totalTokens)) · \(Format.cost(la.totalCost))"
         }
         guard let pt = series.projectedTotal, let h = d.headline, h.totalTokens > 0 else {
             return "Projected — warming up"
