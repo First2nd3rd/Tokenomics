@@ -65,6 +65,48 @@ enum UsageAggregator {
             .sorted { $0.tokens > $1.tokens }
     }
 
+    /// One `DaySnapshot` per day with usage, deduped across the union. Each carries
+    /// the day's totals, cost (at current prices), and per-vendor / per-model splits —
+    /// the unit both the report and the snapshot writer consume. `frozen` tags whether
+    /// the caller is persisting these as historical (true) or computing live (false).
+    static func daySummaries(_ records: [UsageRecord], pricedAt: Int, frozen: Bool,
+                             calendar: Calendar = .current) -> [DaySnapshot] {
+        let byDay = Dictionary(grouping: Dedup.collapse(records, foldKeyless: true)) {
+            DayBucket.day(epoch: $0.epoch, calendar: calendar)
+        }
+        return byDay.map { day, recs in
+            var total = TokenCounts()
+            for r in recs {
+                total.add(input: r.input, output: r.output, cacheCreation: r.cacheCreation, cacheRead: r.cacheRead)
+            }
+            let byVendor: [VendorUsage] = Vendor.allCases.compactMap { vendor in
+                let vrecs = recs.filter { vendorId(for: $0.source) == vendor.providerID }
+                guard !vrecs.isEmpty else { return nil }
+                var counts = TokenCounts()
+                for r in vrecs {
+                    counts.add(input: r.input, output: r.output, cacheCreation: r.cacheCreation, cacheRead: r.cacheRead)
+                }
+                return VendorUsage(vendor: vendor.displayName, counts: counts, cost: cost(vrecs))
+            }
+            return DaySnapshot(date: day, total: total, cost: cost(recs), pricedAt: pricedAt,
+                               frozen: frozen, byVendor: byVendor, byModel: byModel(recs))
+        }
+        .sorted { $0.date < $1.date }
+    }
+
+    /// Total read-time cost of a record set (per-record pricing, summed). Unknown
+    /// models (e.g. `<synthetic>`) price to $0.
+    static func cost(_ records: [UsageRecord]) -> Double {
+        var total = 0.0
+        for r in records {
+            if let pricing = PricingStore.shared.pricing(for: r.model) {
+                total += pricing.cost(input: r.input, output: r.output,
+                                      cacheCreation: r.cacheCreation, cacheRead: r.cacheRead)
+            }
+        }
+        return total
+    }
+
     /// Day → [1440] per-minute buckets (by type + by model), deduped across the union.
     static func dayMinuteMatrix(_ records: [UsageRecord]) -> [String: [MinuteBucket]] {
         var byDay: [String: [MinuteBucket]] = [:]

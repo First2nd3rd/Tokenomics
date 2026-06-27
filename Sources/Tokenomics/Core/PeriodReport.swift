@@ -43,45 +43,51 @@ struct PeriodReport: Codable, Equatable {
     let previousCost: Double
     let projectedTokens: Int?   // end-of-period projection (in-progress week/month only)
     let projectedCost: Double?
+    let pricesFrozen: Bool      // every completed day's cost came from a frozen snapshot
 
-    /// Build a report for the period containing `anchor`. `records` are the archive's
-    /// already-collapsed records spanning at least this period and the previous one.
-    /// Everything derives at read time under `calendar`'s timezone and current prices.
-    static func make(records: [UsageRecord], period: ReportPeriod, anchor: Date,
+    /// Build a report from per-day summaries spanning at least this period and the
+    /// previous one — the unit that blends frozen snapshots with live-computed days.
+    /// Everything derives under `calendar`'s timezone.
+    static func make(daySummaries: [DaySnapshot], period: ReportPeriod, anchor: Date,
                      now: Date = Date(), calendar: Calendar = .current) -> PeriodReport {
         let range = period.range(containing: anchor, calendar: calendar)
         let prior = period.previous(range, calendar: calendar)
+        // ISO day keys order lexically, so range membership is a string compare.
+        let startKey = DayBucket.dayKey(range.start, calendar: calendar)
+        let endKey = DayBucket.dayKey(range.end, calendar: calendar)             // exclusive
+        let priorStartKey = DayBucket.dayKey(prior.start, calendar: calendar)
+        let priorEndKey = DayBucket.dayKey(prior.end, calendar: calendar)
+        let todayKey = DayBucket.dayKey(now, calendar: calendar)
 
-        let periodRecords = records.filter { range.contains(epoch: $0.epoch) }
-        let priorRecords = records.filter { prior.contains(epoch: $0.epoch) }
+        let inPeriod = daySummaries.filter { $0.date >= startKey && $0.date < endKey }
+            .sorted { $0.date < $1.date }
+        let inPrior = daySummaries.filter { $0.date >= priorStartKey && $0.date < priorEndKey }
 
-        let days = UsageAggregator.daily(periodRecords, calendar: calendar)
-        let total = days.reduce(into: TokenCounts()) { $0.add($1.counts) }
-        let cost = days.reduce(0) { $0 + $1.totalCost }
+        var total = TokenCounts()
+        var cost = 0.0
+        for day in inPeriod { total.add(day.total); cost += day.cost }
 
-        let vendorSeries = UsageAggregator.byVendor(periodRecords, calendar: calendar)
-        let byVendor: [VendorUsage] = Vendor.allCases.compactMap { vendor in
-            guard let vdays = vendorSeries[vendor.providerID], !vdays.isEmpty else { return nil }
-            return VendorUsage(vendor: vendor.displayName,
-                               counts: vdays.reduce(into: TokenCounts()) { $0.add($1.counts) },
-                               cost: vdays.reduce(0) { $0 + $1.totalCost })
+        let byVendor = Self.mergeVendors(inPeriod.flatMap(\.byVendor))
+        let byModel = Self.mergeModels(inPeriod.flatMap(\.byModel))
+
+        let days = inPeriod.map { d in
+            DailyUsage(date: d.date, inputTokens: d.total.input, outputTokens: d.total.output,
+                       cacheCreationTokens: d.total.cacheCreation, cacheReadTokens: d.total.cacheRead,
+                       totalTokens: d.total.total, totalCost: d.cost, models: d.byModel.map(\.model).sorted())
         }
-
-        let byModel = UsageAggregator.byModel(periodRecords)
 
         let isCurrent = range.contains(now)
         let fullDays = range.dayCount(calendar: calendar)
         let elapsed = min(fullDays, max(1, (calendar.dateComponents([.day], from: range.start, to: now).day ?? 0) + 1))
         let totalDays = isCurrent ? elapsed : fullDays
 
-        let activeDays = days.count
+        let activeDays = inPeriod.count
         let busiestDay = days.max { $0.totalTokens < $1.totalTokens }
         let dailyAverage = activeDays > 0 ? total.total / activeDays : 0
         let longestStreak = Self.longestStreak(days.map(\.date), calendar: calendar)
 
-        let priorDays = UsageAggregator.daily(priorRecords, calendar: calendar)
-        let previousTokens = priorDays.reduce(0) { $0 + $1.totalTokens }
-        let previousCost = priorDays.reduce(0) { $0 + $1.totalCost }
+        let previousTokens = inPrior.reduce(0) { $0 + $1.total.total }
+        let previousCost = inPrior.reduce(0) { $0 + $1.cost }
 
         // Linear end-of-period projection — only while a multi-day period is still
         // running (a single day is already projected intraday in the menu bar).
@@ -93,12 +99,50 @@ struct PeriodReport: Codable, Equatable {
             projectedCost = cost * factor
         }
 
+        // Costs are "frozen" (historical, not re-priced) when every completed day in
+        // the period came from a stored snapshot. Today is always live and excluded.
+        let pricesFrozen = inPeriod.filter { $0.date < todayKey }.allSatisfy(\.frozen)
+
         return PeriodReport(period: period, key: range.key, title: range.title, isCurrent: isCurrent,
                             total: total, cost: cost, byVendor: byVendor, byModel: byModel, days: days,
                             activeDays: activeDays, totalDays: totalDays, busiestDay: busiestDay,
                             dailyAverage: dailyAverage, longestStreak: longestStreak,
                             previousTokens: previousTokens, previousCost: previousCost,
-                            projectedTokens: projectedTokens, projectedCost: projectedCost)
+                            projectedTokens: projectedTokens, projectedCost: projectedCost,
+                            pricesFrozen: pricesFrozen)
+    }
+
+    /// Convenience: build from raw records (live cost, nothing frozen). Used by tests
+    /// and as the report's fallback when no snapshot is available.
+    static func make(records: [UsageRecord], period: ReportPeriod, anchor: Date,
+                     now: Date = Date(), calendar: Calendar = .current) -> PeriodReport {
+        let summaries = UsageAggregator.daySummaries(records, pricedAt: Int(now.timeIntervalSince1970),
+                                                     frozen: false, calendar: calendar)
+        return make(daySummaries: summaries, period: period, anchor: anchor, now: now, calendar: calendar)
+    }
+
+    /// Sum per-vendor counts + cost across days, sorted by tokens descending.
+    private static func mergeVendors(_ entries: [VendorUsage]) -> [VendorUsage] {
+        var counts: [String: TokenCounts] = [:]
+        var costs: [String: Double] = [:]
+        for e in entries {
+            counts[e.vendor, default: TokenCounts()].add(e.counts)
+            costs[e.vendor, default: 0] += e.cost
+        }
+        return counts.map { VendorUsage(vendor: $0.key, counts: $0.value, cost: costs[$0.key] ?? 0) }
+            .sorted { $0.tokens > $1.tokens }
+    }
+
+    /// Sum per-model counts + cost across days, sorted by tokens descending.
+    private static func mergeModels(_ entries: [ModelUsage]) -> [ModelUsage] {
+        var counts: [String: TokenCounts] = [:]
+        var costs: [String: Double] = [:]
+        for e in entries {
+            counts[e.model, default: TokenCounts()].add(e.counts)
+            costs[e.model, default: 0] += e.cost
+        }
+        return counts.map { ModelUsage(model: $0.key, counts: $0.value, cost: costs[$0.key] ?? 0) }
+            .sorted { $0.tokens > $1.tokens }
     }
 
     /// Longest run of consecutive calendar days among the given day keys ("yyyy-MM-dd").

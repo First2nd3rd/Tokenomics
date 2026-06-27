@@ -17,7 +17,7 @@ enum ReportMarkdown {
         }
 
         var notes = ["This Mac"]
-        if !r.isCurrent { notes.append("estimated at current prices") }
+        if !r.pricesFrozen { notes.append("estimated at current prices") }
         if syncOn { notes.append("excludes other Macs") }
         out += "_\(notes.joined(separator: " · "))_\n"
 
