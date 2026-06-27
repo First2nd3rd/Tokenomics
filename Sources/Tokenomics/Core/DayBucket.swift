@@ -44,6 +44,21 @@ enum DayBucket {
         monthKey(Date(timeIntervalSince1970: TimeInterval(epoch)), calendar: calendar)
     }
 
+    /// Month keys ("YYYY-MM") from `from`'s month through `to`'s month, inclusive —
+    /// the archive segments a date range touches.
+    static func monthsSpanning(from: Date, to: Date, calendar: Calendar = .current) -> [String] {
+        guard from <= to else { return [] }
+        var months: [String] = []
+        var cursor = calendar.dateInterval(of: .month, for: from)?.start ?? from
+        let last = calendar.dateInterval(of: .month, for: to)?.start ?? to
+        while cursor <= last {
+            months.append(monthKey(cursor, calendar: calendar))
+            guard let next = calendar.date(byAdding: .month, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+        return months
+    }
+
     /// Local day key + minute-of-day (0…1439) for a UTC epoch, under `calendar`.
     /// Computed fresh each call so it tracks the current timezone.
     static func dayMinute(epoch: Int, calendar: Calendar = .current) -> (day: String, minute: Int) {

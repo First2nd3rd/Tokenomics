@@ -1,7 +1,7 @@
 import Foundation
 
 /// Token counts split by type for one bucket (minute/day). `total` is their sum.
-struct TokenCounts {
+struct TokenCounts: Codable, Equatable {
     var input = 0
     var output = 0
     var cacheCreation = 0

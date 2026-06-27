@@ -2,7 +2,7 @@ import Foundation
 
 /// One day's aggregated usage, normalized across providers (Claude, Codex, …).
 /// This is the shape every presentation layer (menu bar, future widget) consumes.
-struct DailyUsage {
+struct DailyUsage: Codable, Equatable {
     let date: String            // ISO day, e.g. "2026-06-03"
     let inputTokens: Int
     let outputTokens: Int

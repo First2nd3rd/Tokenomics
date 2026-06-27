@@ -23,18 +23,18 @@ enum UsageAggregator {
     }
 
     /// Combined per-day totals (deduped across the whole union), sorted by date.
-    static func daily(_ records: [UsageRecord]) -> [DailyUsage] {
-        aggregateByDay(Dedup.collapse(records))
+    static func daily(_ records: [UsageRecord], calendar: Calendar = .current) -> [DailyUsage] {
+        aggregateByDay(Dedup.collapse(records), calendar: calendar)
     }
 
     /// Per-vendor daily series (provider id → days), deduped across the whole union.
     /// Collapse runs once over the union; the per-source split happens afterward, so
     /// a duplicate that appears under two sources is still removed before splitting.
-    static func byVendor(_ records: [UsageRecord]) -> [String: [DailyUsage]] {
+    static func byVendor(_ records: [UsageRecord], calendar: Calendar = .current) -> [String: [DailyUsage]] {
         let collapsed = Dedup.collapse(records)
         var out: [String: [DailyUsage]] = [:]
         for (source, recs) in Dictionary(grouping: collapsed, by: { $0.source }) {
-            out[vendorId(for: source)] = aggregateByDay(recs)
+            out[vendorId(for: source)] = aggregateByDay(recs, calendar: calendar)
         }
         return out
     }
@@ -49,6 +49,20 @@ enum UsageAggregator {
             out[machine] = aggregateByDay(recs)
         }
         return out
+    }
+
+    /// Per-model totals (tokens by type + cost), deduped across the union, sorted by
+    /// tokens descending. The `<synthetic>` placeholder model is excluded, matching
+    /// the daily aggregator. Cost is per-record at read-time prices, then summed.
+    static func byModel(_ records: [UsageRecord]) -> [ModelUsage] {
+        var acc: [String: ModelAccumulator] = [:]
+        for r in Dedup.collapse(records) {
+            guard let model = r.model, model != "<synthetic>" else { continue }
+            acc[model, default: ModelAccumulator()].add(r)
+        }
+        return acc
+            .map { $0.value.makeModelUsage(model: $0.key) }
+            .sorted { $0.tokens > $1.tokens }
     }
 
     /// Day → [1440] per-minute buckets (by type + by model), deduped across the union.
@@ -88,10 +102,10 @@ enum UsageAggregator {
     // MARK: - Internal
 
     /// Group ALREADY-collapsed records into per-day totals. Caller collapses first.
-    private static func aggregateByDay(_ collapsed: [UsageRecord]) -> [DailyUsage] {
+    private static func aggregateByDay(_ collapsed: [UsageRecord], calendar: Calendar = .current) -> [DailyUsage] {
         var byDay: [String: DayAccumulator] = [:]
         for r in collapsed {
-            byDay[DayBucket.day(epoch: r.epoch), default: DayAccumulator()].add(r)
+            byDay[DayBucket.day(epoch: r.epoch, calendar: calendar), default: DayAccumulator()].add(r)
         }
         return byDay
             .map { $0.value.makeDailyUsage(date: $0.key) }
@@ -132,5 +146,23 @@ private struct DayAccumulator {
             totalCost: cost,
             models: models.sorted()
         )
+    }
+}
+
+/// One model's running totals (tokens by type + read-time cost).
+private struct ModelAccumulator {
+    var counts = TokenCounts()
+    var cost = 0.0
+
+    mutating func add(_ r: UsageRecord) {
+        counts.add(input: r.input, output: r.output, cacheCreation: r.cacheCreation, cacheRead: r.cacheRead)
+        if let pricing = PricingStore.shared.pricing(for: r.model) {
+            cost += pricing.cost(input: r.input, output: r.output,
+                                 cacheCreation: r.cacheCreation, cacheRead: r.cacheRead)
+        }
+    }
+
+    func makeModelUsage(model: String) -> ModelUsage {
+        ModelUsage(model: model, counts: counts, cost: cost)
     }
 }
