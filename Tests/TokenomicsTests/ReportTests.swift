@@ -100,19 +100,48 @@ struct PeriodReportTests {
         #expect(r.projectedTokens == nil)           // not in progress
     }
 
-    @Test("an in-progress month projects to the full month")
+    @Test("an in-progress month projects from the trailing 7-day rate")
     func currentMonthProjection() {
         let records = [
-            rec(key: "a", tokens: 100, 2026, 6, 1),
-            rec(key: "b", tokens: 100, 2026, 6, 2),
+            rec(key: "a", tokens: 100, 2026, 6, 8),
+            rec(key: "b", tokens: 100, 2026, 6, 9),
         ]
-        // 10 days elapsed of 30 → projection ≈ 200 × 3 = 600.
+        // Viewed on Jun 10: trailing 7-day window (Jun 3–9) holds 200 → rate 200/7.
+        // 21 days left (10th–30th) → 200 completed + 200/7 × 21 = 800.
         let r = PeriodReport.make(records: records, period: .month, anchor: date(2026, 6, 10),
                                   now: date(2026, 6, 10), calendar: cal)
         #expect(r.isCurrent)
         #expect(r.total.total == 200)
         #expect(r.totalDays == 10)                  // elapsed days, not 30
-        #expect(r.projectedTokens == 600)
+        #expect(r.projectedTokens == 800)
+    }
+
+    @Test("projection is stable across days for a steady rate (no early-month spike)")
+    func projectionStability() {
+        // 100 tokens every day from May 25 onward. Under the old ×(fullDays/elapsed)
+        // linear rule, Jun 1 would project 3100 and decay daily; the trailing-rate
+        // rule projects the same ~3000 whether viewed on Jun 1 or Jun 10. Each view
+        // only feeds the records that exist at that instant (no future days).
+        var may: [UsageRecord] = []
+        for d in 25...31 { may.append(rec(key: "m\(d)", tokens: 100, 2026, 5, d)) }
+        var june: [UsageRecord] = []
+        for d in 1...10 { june.append(rec(key: "j\(d)", tokens: 100, 2026, 6, d)) }
+
+        let onJun1 = PeriodReport.make(records: may + [june[0]], period: .month, anchor: date(2026, 6, 1),
+                                       now: date(2026, 6, 1), calendar: cal)
+        let onJun10 = PeriodReport.make(records: may + june, period: .month, anchor: date(2026, 6, 10),
+                                        now: date(2026, 6, 10), calendar: cal)
+        #expect(onJun1.projectedTokens == 3000)     // 0 completed + 100/day × 30 left
+        #expect(onJun10.projectedTokens == 3000)    // 900 completed + 100/day × 21 left
+    }
+
+    @Test("projection never goes below what the period already holds")
+    func projectionFloor() {
+        // All usage today, silent trailing week → floor at the current total.
+        let records = [rec(key: "t", tokens: 500, 2026, 6, 10)]
+        let r = PeriodReport.make(records: records, period: .month, anchor: date(2026, 6, 10),
+                                  now: date(2026, 6, 10), calendar: cal)
+        #expect(r.projectedTokens == 500)
     }
 
     @Test("byVendor splits Claude and GPT; byModel excludes synthetic and sorts")

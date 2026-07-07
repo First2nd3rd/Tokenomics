@@ -89,14 +89,29 @@ struct PeriodReport: Codable, Equatable {
         let previousTokens = inPrior.reduce(0) { $0 + $1.total.total }
         let previousCost = inPrior.reduce(0) { $0 + $1.cost }
 
-        // Linear end-of-period projection — only while a multi-day period is still
-        // running (a single day is already projected intraday in the menu bar).
+        // End-of-period projection — only while a multi-day period is still running
+        // (a single day is already projected intraday in the menu bar). Projected as
+        // completed days so far + a trailing 7-day average for the days left: a
+        // same-period linear extrapolation whipsaws (day 1 of a month shows 31× one
+        // day's usage, then decays every day), while the trailing window is stable
+        // across day boundaries. Floored at the current total — a quiet week never
+        // projects the period below what it already holds.
         var projectedTokens: Int?
         var projectedCost: Double?
         if isCurrent, period != .day, elapsed < fullDays {
-            let factor = Double(fullDays) / Double(elapsed)
-            projectedTokens = Int(Double(total.total) * factor)
-            projectedCost = cost * factor
+            let trailingDays = 7
+            let windowStart = calendar.date(byAdding: .day, value: -trailingDays, to: now) ?? now
+            let windowStartKey = DayBucket.dayKey(windowStart, calendar: calendar)
+            let window = daySummaries.filter { $0.date >= windowStartKey && $0.date < todayKey }
+            let tokenRate = Double(window.reduce(0) { $0 + $1.total.total }) / Double(trailingDays)
+            let costRate = window.reduce(0.0) { $0 + $1.cost } / Double(trailingDays)
+
+            let today = inPeriod.first { $0.date == todayKey }
+            let daysLeftIncludingToday = Double(fullDays - elapsed + 1)
+            let completedTokens = Double(total.total - (today?.total.total ?? 0))
+            let completedCost = cost - (today?.cost ?? 0)
+            projectedTokens = max(Int(completedTokens + tokenRate * daysLeftIncludingToday), total.total)
+            projectedCost = max(completedCost + costRate * daysLeftIncludingToday, cost)
         }
 
         // Costs are "frozen" (historical, not re-priced) when every completed day in
