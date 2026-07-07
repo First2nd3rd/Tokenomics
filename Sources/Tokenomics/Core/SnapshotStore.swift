@@ -36,7 +36,6 @@ final class SnapshotStore {
             if sweptForDay == todayKey { return }
 
             let existing = snapshots()
-            let have = Set(existing.map(\.date))
 
             // Only re-read the archive months that could hold un-snapshotted days:
             // from the last snapshot onward (everything earlier is already frozen).
@@ -48,15 +47,28 @@ final class SnapshotStore {
             }
 
             let records = archive.records(forMonths: months)
-            let fresh = UsageAggregator
+            let summaries = UsageAggregator
                 .daySummaries(records, pricedAt: Int(now.timeIntervalSince1970), frozen: true, calendar: calendar)
-                .filter { $0.date < todayKey && !have.contains($0.date) }
+                .filter { $0.date < todayKey }
 
             sweptForDay = todayKey
-            guard !fresh.isEmpty else { return }
 
-            let merged = (existing + fresh).sorted { $0.date < $1.date }
-            guard let fileURL else { return }
+            // New days are frozen; an already-frozen day is RE-frozen only when the
+            // archive now holds MORE tokens for it (a turn straddling midnight keeps
+            // growing after the day was first swept — grow-only, so a partial
+            // recompute window can never shrink a frozen day).
+            var byDate = Dictionary(uniqueKeysWithValues: existing.map { ($0.date, $0) })
+            var changed = false
+            for day in summaries {
+                if let frozen = byDate[day.date] {
+                    guard day.total.total > frozen.total.total else { continue }
+                }
+                byDate[day.date] = day
+                changed = true
+            }
+            guard changed, let fileURL else { return }
+
+            let merged = byDate.values.sorted { $0.date < $1.date }
             try? SnapshotFile.encode(merged, machineId: machineId, updatedAt: Int(now.timeIntervalSince1970))
                 .write(to: fileURL, options: .atomic)
         }

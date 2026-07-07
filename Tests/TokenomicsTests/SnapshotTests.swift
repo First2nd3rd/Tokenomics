@@ -139,4 +139,44 @@ struct SnapshotStoreTests {
         fresh.refresh(now: clock, archive: archive, calendar: cal)
         #expect(fresh.snapshots().count == 2)
     }
+
+    @Test("re-freezes a day whose archive later grew (midnight-straddling turn)")
+    func growOnlyRefreeze() {
+        let folder = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: folder, machineId: "m", displayName: { "m" }, appVersion: "0")
+        let yesterday = Int(clock.timeIntervalSince1970) - 86_400
+        let turn = UsageRecord(source: .claude, key: "T", epoch: yesterday, input: 0, output: 100,
+                               cacheCreation: 0, cacheRead: 0, model: "claude-opus-4-8")
+        archive.ingest([turn], now: clock)
+        let file = tempFile()
+        SnapshotStore(fileURL: file, machineId: "m").refresh(now: clock, archive: archive, calendar: cal)
+
+        // The same turn's output kept growing after the day was frozen.
+        let grown = UsageRecord(source: .claude, key: "T", epoch: yesterday, input: 0, output: 900,
+                                cacheCreation: 0, cacheRead: 0, model: "claude-opus-4-8")
+        archive.ingest([turn, grown], now: clock)
+        let fresh = SnapshotStore(fileURL: file, machineId: "m")
+        fresh.refresh(now: clock, archive: archive, calendar: cal)
+        #expect(fresh.snapshots().first?.total.total == 900)   // updated, not stuck at 100
+    }
+
+    @Test("never shrinks a frozen day when a recompute says less")
+    func neverShrinks() throws {
+        let folder = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: folder, machineId: "m", displayName: { "m" }, appVersion: "0")
+        archive.ingest([rec(daysAgo: 1)], now: clock)   // archive says 100 for yesterday
+        let file = tempFile()
+
+        // A frozen snapshot claims MORE than the archive (e.g. records the archive
+        // has since lost to a partial recompute window) — it must be kept as is.
+        let day = DayBucket.day(epoch: Int(clock.timeIntervalSince1970) - 86_400, calendar: cal)
+        let bigger = DaySnapshot(date: day, total: TokenCounts(input: 5_000, output: 0, cacheCreation: 0, cacheRead: 0),
+                                 cost: 9.9, pricedAt: 1, frozen: true, byVendor: [], byModel: [])
+        try SnapshotFile.encode([bigger], machineId: "m", updatedAt: 1).write(to: file)
+
+        let store = SnapshotStore(fileURL: file, machineId: "m")
+        store.refresh(now: clock, archive: archive, calendar: cal)
+        #expect(store.snapshots().first?.total.total == 5_000)   // untouched
+        #expect(store.snapshots().first?.cost == 9.9)
+    }
 }
