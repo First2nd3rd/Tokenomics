@@ -52,6 +52,16 @@ struct UsageRecordTests {
         #expect(out.first?.output == 99)
     }
 
+    @Test("equal outputs tie-break on total tokens (a corrected parse supersedes)")
+    func collapseTieBreaksOnTotal() {
+        // Same event, same output, but the corrected parse carries more cache-read
+        // (a Codex sub-turn the cumulative missed) — it must win either order.
+        let stale = rec(key: "K", input: 10, output: 5, cacheRead: 0)
+        let corrected = rec(key: "K", input: 10, output: 5, cacheRead: 400)
+        #expect(Dedup.collapse([stale, corrected]).first?.cacheRead == 400)
+        #expect(Dedup.collapse([corrected, stale]).first?.cacheRead == 400)
+    }
+
     @Test("collapses identical keyed records to one (cross-machine idempotency)")
     func collapseIdempotent() throws {
         // The same Codex event arriving from two machines (e.g. a synced ~/.codex).

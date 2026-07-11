@@ -2,9 +2,13 @@ import Foundation
 
 /// Reads OpenAI Codex usage from `~/.codex/sessions/**/rollout-*.jsonl`.
 ///
-/// `token_count` events carry a CUMULATIVE `total_token_usage` per session. We emit
-/// per-event deltas (current cumulative − previous), which naturally dedups repeated
-/// events. Mapping to the normalized model:
+/// `token_count` events carry the turn's own usage in `last_token_usage` plus a
+/// session-cumulative `total_token_usage`. We count PER-TURN usage: some turns
+/// (parallel review / sub-agent threads in newer CLIs) report `last_token_usage`
+/// WITHOUT advancing the session cumulative, so summing cumulative deltas silently
+/// undercounts — per-turn sums match `ccusage codex` exactly. Old rollouts without
+/// `last_token_usage` fall back to cumulative deltas. Mapping to the normalized
+/// model:
 ///   - cacheRead       = cached_input_tokens
 ///   - input           = input_tokens − cached_input_tokens (non-cached input)
 ///   - output          = output_tokens (already includes reasoning tokens)
@@ -24,7 +28,7 @@ final class CodexProvider: UsageProvider {
     /// Per-file parse cache with NDJSON persistence; the version in the filename is
     /// the format version. Deltas are computed per file, so each file's records are
     /// self-contained and cacheable by (mtime, size).
-    private let cache = FileRecordCache<UsageRecord>(diskFileName: "codex-records-v3.ndjson",
+    private let cache = FileRecordCache<UsageRecord>(diskFileName: "codex-records-v5.ndjson",
                                                      queueLabel: "tokenomics.codex-reader")
 
     /// Raw, pre-dedup records; the union + single `Dedup.collapse` happens upstream.
@@ -41,54 +45,93 @@ final class CodexProvider: UsageProvider {
 
     // MARK: - Parsing
 
-    /// Parse one rollout file into per-event delta records. Cumulative counters are
-    /// tracked within the file; the model carries forward from the latest
-    /// `turn_context`. Self-contained, so the result caches by (mtime, size).
-    private static func parseFile(_ file: URL) -> [UsageRecord] {
+    /// Parse one rollout file into per-turn records. The model carries forward from
+    /// the latest `turn_context`; cumulative counters are tracked for the old-format
+    /// fallback. Self-contained, so the result caches by (mtime, size). Internal for
+    /// fixture tests.
+    static func parseFile(_ file: URL) -> [UsageRecord] {
         let decoder = JSONDecoder()
         var records: [UsageRecord] = []
         var model: String?
+        var firstModel: String?
         var prevInput = 0, prevCached = 0, prevOutput = 0
         // Stable per-event identity for cross-machine dedup: the rollout file's name
         // (carries the session UUID; preserved by file sync) + the event's ordinal.
         let session = file.lastPathComponent
         var index = 0
+        var seenEvents = Set<String>()
 
         LineReader.forEachLine(of: file) { lineData in
             guard let line = try? decoder.decode(CodexLine.self, from: lineData) else { return }
 
             if line.type == "turn_context", let m = line.payload?.model {
                 model = m
+                if firstModel == nil { firstModel = m }
                 return
             }
 
             guard line.type == "event_msg",
                   line.payload?.type == "token_count",
-                  let usage = line.payload?.info?.total_token_usage,
+                  let info = line.payload?.info,
+                  let usage = info.total_token_usage,
                   let timestamp = line.timestamp,
                   let date = DayBucket.date(from: timestamp)
             else { return }
 
-            let cached = usage.cached_input_tokens ?? 0
-            // Deltas vs the previous cumulative (clamped ≥ 0 against resets).
-            let deltaInput = max(0, usage.input_tokens - prevInput)
-            let deltaCached = max(0, cached - prevCached)
-            let deltaOutput = max(0, usage.output_tokens - prevOutput)
+            // Parallel-session rollouts occasionally write the SAME token_count
+            // twice (identical timestamp, per-turn, and cumulative counts). Counting
+            // both would double-bill the turn — skip literal re-emissions, as
+            // `ccusage codex` does.
+            let turnSig = info.last_token_usage.map {
+                "\($0.input_tokens)|\($0.cached_input_tokens ?? 0)|\($0.output_tokens)"
+            } ?? "-"
+            let signature = "\(timestamp)|\(usage.input_tokens)|\(usage.cached_input_tokens ?? 0)|" +
+                            "\(usage.output_tokens)|\(turnSig)"
+            guard seenEvents.insert(signature).inserted else { return }
+
+            let input: Int, cachedRead: Int, output: Int
+            if let turn = info.last_token_usage {
+                // Per-turn usage. A sub-turn (parallel review thread) reports here
+                // without advancing the cumulative, so this is the complete count.
+                cachedRead = turn.cached_input_tokens ?? 0
+                input = max(0, turn.input_tokens - cachedRead)
+                output = turn.output_tokens
+            } else {
+                // Old rollouts: cumulative only; per-event deltas (clamped ≥ 0
+                // against resets).
+                let cached = usage.cached_input_tokens ?? 0
+                let deltaInput = max(0, usage.input_tokens - prevInput)
+                let deltaCached = max(0, cached - prevCached)
+                input = max(0, deltaInput - deltaCached)
+                cachedRead = deltaCached
+                output = max(0, usage.output_tokens - prevOutput)
+            }
+            // Track the cumulative unconditionally so a mixed file stays consistent.
             prevInput = usage.input_tokens
-            prevCached = cached
+            prevCached = usage.cached_input_tokens ?? 0
             prevOutput = usage.output_tokens
 
             records.append(UsageRecord(
                 source: .codex,
                 key: Dedup.key(session, String(index)),
                 epoch: Int(date.timeIntervalSince1970),
-                input: max(0, deltaInput - deltaCached),
-                output: deltaOutput,
+                input: input,
+                output: output,
                 cacheCreation: 0,
-                cacheRead: deltaCached,
+                cacheRead: cachedRead,
                 model: model
             ))
             index += 1
+        }
+        // Events logged before the file's first turn_context carry no model. They
+        // belong to the same session, so attribute them to its first declared model
+        // (ccusage instead labels this bucket with a hardcoded "gpt-5" fallback).
+        if let firstModel {
+            records = records.map { r in
+                r.model != nil ? r : UsageRecord(
+                    source: r.source, key: r.key, epoch: r.epoch, input: r.input, output: r.output,
+                    cacheCreation: r.cacheCreation, cacheRead: r.cacheRead, model: firstModel)
+            }
         }
         return records
     }
@@ -130,6 +173,7 @@ private struct CodexLine: Decodable {
 
     struct Info: Decodable {
         let total_token_usage: Usage?
+        let last_token_usage: Usage?
     }
 
     struct Usage: Decodable {

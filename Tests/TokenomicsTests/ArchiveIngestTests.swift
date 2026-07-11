@@ -145,6 +145,18 @@ struct ArchiveIngestTests {
         #expect(a.isBackfilled == true)
     }
 
+    @Test("a backfill from an older parser version is re-run")
+    func backfillVersionGate() throws {
+        let folder = MemoryArchiveFolder()
+        let a = archive(folder)
+        // A meta written before backfillVersion existed (v1 archive).
+        let old = UsageArchive.Meta(schemaMajor: 1, backfillComplete: true, backfillVersion: nil)
+        try folder.writeMeta(JSONEncoder().encode(old))
+        #expect(a.isBackfilled == false)      // parser fixed since → needs a re-run
+        a.backfill([rec("A", output: 1)])
+        #expect(a.isBackfilled == true)       // stamped with the current version
+    }
+
     @Test("re-running backfill rewrites no segments")
     func backfillIdempotent() {
         let folder = MemoryArchiveFolder()

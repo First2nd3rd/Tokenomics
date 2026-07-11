@@ -45,6 +45,9 @@ struct UsageRecord: Codable, Equatable, Hashable {
         self.machine = machine
     }
 
+    /// Sum of all four token components — the collapse tie-breaker.
+    var totalTokens: Int { input + output + cacheCreation + cacheRead }
+
     /// A copy tagged with `machine` — used when stamping a peer file's records with
     /// the publisher's id at read time.
     func with(machine: String?) -> UsageRecord {
@@ -81,6 +84,8 @@ enum Dedup {
     /// Collapse duplicates: among records sharing a key, keep the one with the
     /// largest output (a streamed Claude turn is logged repeatedly with a growing
     /// output; Codex's per-event records each carry a unique key, so all survive).
+    /// Equal outputs tie-break on total tokens, so a corrected parse of the same
+    /// event (same output, more cache-read) supersedes an archived older one.
     /// Order-independent.
     ///
     /// Keyless records (a Claude line with no message.id/requestId) have no stable
@@ -94,7 +99,8 @@ enum Dedup {
         for record in records {
             let identity = record.key ?? (foldKeyless ? syntheticKey(record) : nil)
             if let identity {
-                if let existing = best[identity], existing.output >= record.output { continue }
+                if let existing = best[identity],
+                   (existing.output, existing.totalTokens) >= (record.output, record.totalTokens) { continue }
                 best[identity] = record
             } else {
                 keyless.append(record)

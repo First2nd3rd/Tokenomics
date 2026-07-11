@@ -37,16 +37,11 @@ final class SnapshotStore {
 
             let existing = snapshots()
 
-            // Only re-read the archive months that could hold un-snapshotted days:
-            // from the last snapshot onward (everything earlier is already frozen).
-            let months: [String]
-            if let last = existing.map(\.date).max(), let lastDate = Self.date(fromDayKey: last, calendar: calendar) {
-                months = DayBucket.monthsSpanning(from: lastDate, to: now, calendar: calendar)
-            } else {
-                months = archive.availableMonths()
-            }
-
-            let records = archive.records(forMonths: months)
+            // Sweep the WHOLE archive (a few MB, once per day): grow-only re-freeze
+            // must see every month, so a parser fix that back-corrects an old month's
+            // segment propagates into its frozen days instead of leaving the report
+            // stuck below the dashboard.
+            let records = archive.records(forMonths: archive.availableMonths())
             let summaries = UsageAggregator
                 .daySummaries(records, pricedAt: Int(now.timeIntervalSince1970), frozen: true, calendar: calendar)
                 .filter { $0.date < todayKey }
@@ -74,10 +69,4 @@ final class SnapshotStore {
         }
     }
 
-    /// Parse a "yyyy-MM-dd" key to a Date under `calendar` (its day-start instant).
-    private static func date(fromDayKey key: String, calendar: Calendar) -> Date? {
-        let parts = key.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3 else { return nil }
-        return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
-    }
 }

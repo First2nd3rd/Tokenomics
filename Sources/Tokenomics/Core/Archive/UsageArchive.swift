@@ -59,18 +59,25 @@ final class UsageArchive {
 
     // MARK: - Backfill
 
+    /// Bump when a parser fix changes what history parses to — the next launch then
+    /// re-runs backfill (idempotent merge), folding corrected values into EVERY
+    /// month's segment, including ones outside the steady ingest window.
+    /// 2: Codex per-turn counting (last_token_usage; cumulative deltas undercounted).
+    static let backfillVersion = 2
+
     /// Tiny persisted archive-wide state. Rebuildable from the segments, so a loss
     /// just re-runs backfill.
     struct Meta: Codable {
         var schemaMajor: Int
         var backfillComplete: Bool
+        var backfillVersion: Int?   // absent in v1 metas
     }
 
-    /// Whether the one-time backfill of pre-existing history has completed.
+    /// Whether backfill has completed AT the current parser version.
     var isBackfilled: Bool {
         guard let data = folder.readMeta(),
               let meta = try? JSONDecoder().decode(Meta.self, from: data) else { return false }
-        return meta.backfillComplete
+        return meta.backfillComplete && (meta.backfillVersion ?? 1) >= Self.backfillVersion
     }
 
     /// Seed the archive from all currently-available history (the full local corpus),
@@ -86,7 +93,8 @@ final class UsageArchive {
             for (month, records) in byMonth {
                 writeMerged(records, into: month)
             }
-            let meta = Meta(schemaMajor: ArchiveFile.schemaMajor, backfillComplete: true)
+            let meta = Meta(schemaMajor: ArchiveFile.schemaMajor, backfillComplete: true,
+                            backfillVersion: Self.backfillVersion)
             if let data = try? JSONEncoder().encode(meta) { try? folder.writeMeta(data) }
         }
     }
