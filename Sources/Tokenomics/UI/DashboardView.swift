@@ -99,7 +99,7 @@ struct DashboardView: View {
     }
 
     private func sectionLabel(_ text: String) -> some View {
-        Text(text).font(.caption2).foregroundStyle(.secondary)
+        Text(text).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
     }
 
     // MARK: - Rate chart (intraday, smooth stack by token type)
@@ -154,11 +154,14 @@ struct DashboardView: View {
         }
     }
 
-    /// Style legend (when the style has one) + the rate deck's page dots.
+    /// Style legend (when the style has one) + the rate deck's page dots. A hidden
+    /// legend keeps the row's height when there is nothing to show, so switching
+    /// styles or pages never reflows the popover.
     private var rateFooter: some View {
         HStack(spacing: 8) {
             if rateStyle == .stacked { rateLegend }
             else if rateStyle == .model { modelLegend }
+            else { rateLegend.hidden() }
             Spacer(minLength: 0)
             pageDots(current: ratePage, count: Self.ratePageCount) { ratePage = $0 }
         }
@@ -282,10 +285,12 @@ struct DashboardView: View {
         if deckPage == 1 { dailyBarChart } else { cumulativeChart }
     }
 
-    /// Page dots, plus the type legend while the bars are showing.
+    /// Page dots, plus the type legend while the bars are showing. On the cumulative
+    /// page the legend stays as hidden placeholder, so flipping pages never changes
+    /// the deck's height (an NSPopover reflow reads as the whole panel jumping).
     private var deckFooter: some View {
         HStack(spacing: 8) {
-            if deckPage == 1 { rateLegend }
+            if deckPage == 1 { rateLegend } else { rateLegend.hidden() }
             Spacer(minLength: 0)
             pageDots(current: deckPage, count: Self.deckPageCount) { deckPage = $0 }
         }
