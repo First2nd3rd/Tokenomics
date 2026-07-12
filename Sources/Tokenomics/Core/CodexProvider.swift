@@ -28,7 +28,7 @@ final class CodexProvider: UsageProvider {
     /// Per-file parse cache with NDJSON persistence; the version in the filename is
     /// the format version. Deltas are computed per file, so each file's records are
     /// self-contained and cacheable by (mtime, size).
-    private let cache = FileRecordCache<UsageRecord>(diskFileName: "codex-records-v5.ndjson",
+    private let cache = FileRecordCache<UsageRecord>(diskFileName: "codex-records-v6.ndjson",
                                                      queueLabel: "tokenomics.codex-reader")
 
     /// Raw, pre-dedup records; the union + single `Dedup.collapse` happens upstream.
@@ -60,8 +60,23 @@ final class CodexProvider: UsageProvider {
         let session = file.lastPathComponent
         var index = 0
         var seenEvents = Set<String>()
+        // Forked / sub-agent sessions REPLAY the parent's token_count history into
+        // the new file at spawn time (verified: value-identical to the parent,
+        // hundreds of events stamped within one wall-clock second). Counting them
+        // double-bills usage the parent's file already carries, so the leading
+        // same-second block is skipped — mirroring ccusage's #1369 semantics.
+        var isFirstLine = true
+        var skipReplay = false
+        var replaySecond: String?
 
         LineReader.forEachLine(of: file) { lineData in
+            if isFirstLine {
+                isFirstLine = false
+                if let head = String(data: lineData, encoding: .utf8),
+                   head.contains("thread_spawn") || head.contains("forked_from_id") {
+                    skipReplay = true
+                }
+            }
             guard let line = try? decoder.decode(CodexLine.self, from: lineData) else { return }
 
             if line.type == "turn_context", let m = line.payload?.model {
@@ -77,6 +92,20 @@ final class CodexProvider: UsageProvider {
                   let timestamp = line.timestamp,
                   let date = DayBucket.date(from: timestamp)
             else { return }
+
+            if skipReplay {
+                let second = String(timestamp.prefix(19))
+                if replaySecond == nil { replaySecond = second }
+                if second == replaySecond {
+                    // Replayed history: don't emit, but keep the cumulative baseline
+                    // so a later old-format delta stays correct.
+                    prevInput = usage.input_tokens
+                    prevCached = usage.cached_input_tokens ?? 0
+                    prevOutput = usage.output_tokens
+                    return
+                }
+                skipReplay = false   // first event past the spawn second: real work
+            }
 
             // Parallel-session rollouts occasionally write the SAME token_count
             // twice (identical timestamp, per-turn, and cumulative counts). Counting

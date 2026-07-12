@@ -105,6 +105,34 @@ struct CodexProviderTests {
         #expect(records.map(\.model) == ["gpt-5.6-sol", "gpt-5.6-sol"])
     }
 
+    @Test("skips the spawn-second replay block of a forked/sub-agent session")
+    func skipsForkReplayBlock() {
+        let file = write([
+            #"{"type":"session_meta","payload":{"id":"s1","forked_from_id":"parent-id","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-id"}}}}}"#,
+            // Replayed parent history: hundreds of events stamped in ONE second.
+            tokenCount(total: (1000, 800, 50), last: (1000, 800, 50), ts: "2026-07-12T01:34:05.055Z"),
+            tokenCount(total: (2000, 1600, 90), last: (1000, 800, 40), ts: "2026-07-12T01:34:05.064Z"),
+            #"{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+            // Real work starts seconds later.
+            tokenCount(total: (2500, 2000, 120), last: (500, 400, 30), ts: "2026-07-12T01:34:23.529Z"),
+        ])
+        let records = CodexProvider.parseFile(file)
+        #expect(records.count == 1)
+        #expect(records[0].output == 30)
+        #expect(records[0].cacheRead == 400)
+        #expect(records[0].model == "gpt-5.6-sol")
+    }
+
+    @Test("does not replay-skip an ordinary session with same-second events")
+    func noSkipWithoutForkMarkers() {
+        let file = write([
+            #"{"type":"session_meta","payload":{"id":"s1"}}"#,
+            tokenCount(total: (1000, 800, 50), last: (1000, 800, 50), ts: "2026-07-12T01:34:05.055Z"),
+            tokenCount(total: (2000, 1600, 90), last: (1000, 800, 40), ts: "2026-07-12T01:34:05.064Z"),
+        ])
+        #expect(CodexProvider.parseFile(file).count == 2)
+    }
+
     @Test("per-event keys are stable and distinct")
     func stableKeys() {
         let file = write([
