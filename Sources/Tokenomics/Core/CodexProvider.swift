@@ -28,7 +28,7 @@ final class CodexProvider: UsageProvider {
     /// Per-file parse cache with NDJSON persistence; the version in the filename is
     /// the format version. Deltas are computed per file, so each file's records are
     /// self-contained and cacheable by (mtime, size).
-    private let cache = FileRecordCache<UsageRecord>(diskFileName: "codex-records-v6.ndjson",
+    private let cache = FileRecordCache<UsageRecord>(diskFileName: "codex-records-v7.ndjson",
                                                      queueLabel: "tokenomics.codex-reader")
 
     /// Raw, pre-dedup records; the union + single `Dedup.collapse` happens upstream.
@@ -49,6 +49,11 @@ final class CodexProvider: UsageProvider {
     /// the latest `turn_context`; cumulative counters are tracked for the old-format
     /// fallback. Self-contained, so the result caches by (mtime, size). Internal for
     /// fixture tests.
+    /// Max gap between consecutive replayed token_counts (and between the spawn
+    /// timestamp and the first one). Measured: intra-block gaps stay sub-second even
+    /// when the flush straddles a second; the first real turn lands ≥ 6.6s later.
+    private static let replayChainGap: TimeInterval = 2
+
     static func parseFile(_ file: URL) -> [UsageRecord] {
         let decoder = JSONDecoder()
         var records: [UsageRecord] = []
@@ -61,13 +66,18 @@ final class CodexProvider: UsageProvider {
         var index = 0
         var seenEvents = Set<String>()
         // Forked / sub-agent sessions REPLAY the parent's token_count history into
-        // the new file at spawn time (verified: value-identical to the parent,
-        // hundreds of events stamped within one wall-clock second). Counting them
-        // double-bills usage the parent's file already carries, so the leading
-        // same-second block is skipped — mirroring ccusage's #1369 semantics.
+        // the new file at spawn time (verified: value-identical to the parent).
+        // Counting it double-bills usage the parent's file already carries. The
+        // whole block flushes in milliseconds but its timestamps can straddle a
+        // wall-clock second, so a fixed "first second" window under-skips (observed:
+        // a 52M leak). Instead the block is a CHAIN anchored at the spawn timestamp:
+        // an event is replay while it lands within `replayChainGap` of the previous
+        // replayed event. Real turns need a model roundtrip — the first genuine
+        // token_count arrives several seconds after the chain ends (observed ≥ 6.6s,
+        // intra-block gaps < 1s), so the threshold has margin on both sides.
         var isFirstLine = true
         var skipReplay = false
-        var replaySecond: String?
+        var lastReplayDate: Date?
 
         LineReader.forEachLine(of: file) { lineData in
             if isFirstLine {
@@ -75,6 +85,13 @@ final class CodexProvider: UsageProvider {
                 if let head = String(data: lineData, encoding: .utf8),
                    head.contains("thread_spawn") || head.contains("forked_from_id") {
                     skipReplay = true
+                    // Anchor at the session_meta timestamp: replayed history starts
+                    // AT spawn, while a fork with nothing to replay logs its first
+                    // token_count a roundtrip later and must not be skipped.
+                    if let meta = try? decoder.decode(CodexLine.self, from: lineData),
+                       let ts = meta.timestamp {
+                        lastReplayDate = DayBucket.date(from: ts)
+                    }
                 }
             }
             guard let line = try? decoder.decode(CodexLine.self, from: lineData) else { return }
@@ -94,17 +111,16 @@ final class CodexProvider: UsageProvider {
             else { return }
 
             if skipReplay {
-                let second = String(timestamp.prefix(19))
-                if replaySecond == nil { replaySecond = second }
-                if second == replaySecond {
+                if date.timeIntervalSince(lastReplayDate ?? date) <= Self.replayChainGap {
                     // Replayed history: don't emit, but keep the cumulative baseline
                     // so a later old-format delta stays correct.
+                    lastReplayDate = date
                     prevInput = usage.input_tokens
                     prevCached = usage.cached_input_tokens ?? 0
                     prevOutput = usage.output_tokens
                     return
                 }
-                skipReplay = false   // first event past the spawn second: real work
+                skipReplay = false   // first event clear of the spawn chain: real work
             }
 
             // Parallel-session rollouts occasionally write the SAME token_count

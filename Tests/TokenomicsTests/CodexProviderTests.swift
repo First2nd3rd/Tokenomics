@@ -123,6 +123,36 @@ struct CodexProviderTests {
         #expect(records[0].model == "gpt-5.6-sol")
     }
 
+    @Test("skips a replay block whose flush straddles a second boundary")
+    func skipsMultiSecondReplayBlock() {
+        // A large replayed history takes >1 wall-clock second to write: events land
+        // in :05 AND :06. All of it is replay; real work starts 8 seconds later.
+        let file = write([
+            #"{"type":"session_meta","timestamp":"2026-07-14T01:48:05.900Z","payload":{"id":"s1","forked_from_id":"parent-id"}}"#,
+            tokenCount(total: (1000, 800, 50), last: (1000, 800, 50), ts: "2026-07-14T01:48:05.930Z"),
+            tokenCount(total: (2000, 1600, 90), last: (1000, 800, 40), ts: "2026-07-14T01:48:05.995Z"),
+            tokenCount(total: (3000, 2400, 130), last: (1000, 800, 40), ts: "2026-07-14T01:48:06.010Z"),
+            tokenCount(total: (4000, 3200, 170), last: (1000, 800, 40), ts: "2026-07-14T01:48:06.480Z"),
+            #"{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+            tokenCount(total: (4500, 3600, 200), last: (500, 400, 30), ts: "2026-07-14T01:48:14.223Z"),
+        ])
+        let records = CodexProvider.parseFile(file)
+        #expect(records.count == 1)
+        #expect(records[0].output == 30)
+    }
+
+    @Test("does not replay-skip a forked session that carries no replayed history")
+    func noSkipWhenForkHasNoReplay() {
+        // Fork markers, but the first token_count comes long after spawn — there was
+        // nothing to replay. Real sub-turn events close together must all count.
+        let file = write([
+            #"{"type":"session_meta","timestamp":"2026-07-14T01:48:05.900Z","payload":{"id":"s1","forked_from_id":"parent-id"}}"#,
+            tokenCount(total: (1000, 800, 50), last: (1000, 800, 50), ts: "2026-07-14T01:48:15.100Z"),
+            tokenCount(total: (2000, 1600, 90), last: (1000, 800, 40), ts: "2026-07-14T01:48:16.000Z"),
+        ])
+        #expect(CodexProvider.parseFile(file).count == 2)
+    }
+
     @Test("does not replay-skip an ordinary session with same-second events")
     func noSkipWithoutForkMarkers() {
         let file = write([

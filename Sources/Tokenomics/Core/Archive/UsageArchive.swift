@@ -63,7 +63,7 @@ final class UsageArchive {
     /// re-runs backfill (idempotent merge), folding corrected values into EVERY
     /// month's segment, including ones outside the steady ingest window.
     /// 2: Codex per-turn counting (last_token_usage; cumulative deltas undercounted).
-    static let backfillVersion = 2
+    static let backfillVersion = 3
 
     /// Tiny persisted archive-wide state. Rebuildable from the segments, so a loss
     /// just re-runs backfill.
