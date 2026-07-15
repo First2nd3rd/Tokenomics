@@ -29,14 +29,17 @@ struct DashboardView: View {
     /// instead of being auto-centered), with a floor of 1 and a little headroom.
     private func yUpper(_ peak: Int) -> Int { max(Int(Double(peak) * 1.08), 1) }
 
-    /// A stacked band thinner than ~2% of the y-range is under a pixel or two on an
-    /// 84pt chart: its color can't show, so it renders as a dark outline hugging the
-    /// flanks of taller spikes. Values below this floor are drawn as zero.
-    private static let bandSliverFraction = 0.02
-
-    private func sliverFloor(_ upper: Int) -> Int {
-        Int(Double(upper) * Self.bandSliverFraction)
-    }
+    /// Interpolation for the STACKED area charts — keep it a POLYLINE method.
+    /// Under a curved method a band whose value is ZERO still paints a hairline along
+    /// the silhouette of the bands below it, so a model that never ran shows up as an
+    /// outline tracing another model's spikes; real bands also come out too thick.
+    /// Measured against the analytic band geometry, `.linear` tracks true thickness
+    /// (slope 0.94) while `.monotone` adds ~3px wherever the stack below is steep and
+    /// inflates the rest ~12%. `.stepEnd` is equally clean; `.monotone`, `.cardinal`
+    /// and `.catmullRom` all reproduce it — the polyline/curve split is what's
+    /// verified, the reason inside Charts is not. Only stacking triggers this, so the
+    /// unstacked marks (line style, peer overlay, cumulative lines) keep `.monotone`.
+    private static let stackInterpolation: InterpolationMethod = .linear
 
     private func rateYUpper(_ points: [RatePoint], _ peer: [LivePoint]) -> Int {
         yUpper(max(points.map(\.total).max() ?? 0, peer.map(\.total).max() ?? 0))
@@ -210,16 +213,14 @@ struct DashboardView: View {
         .frame(width: 380, height: 84)
     }
 
-    /// Optional: a smooth area stacked by token type (cache-read usually dominates).
+    /// Optional: an area stacked by token type (cache-read usually dominates).
     private func stackedRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
-        let floor = sliverFloor(rateYUpper(points, peer))
-        return Chart {
+        Chart {
             ForEach(points) { point in
                 ForEach(ChartKit.tokenBands, id: \.name) { band in
-                    let value = band.value(point.counts)
-                    AreaMark(x: .value("Time", point.x), y: .value("Tokens", value >= floor ? value : 0))
+                    AreaMark(x: .value("Time", point.x), y: .value("Tokens", band.value(point.counts)))
                         .foregroundStyle(by: .value("Type", band.name))
-                        .interpolationMethod(.monotone)
+                        .interpolationMethod(Self.stackInterpolation)
                 }
             }
             peerOverlay(peer)
@@ -252,15 +253,13 @@ struct DashboardView: View {
 
     private func modelRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
         let order = modelColorOrder
-        let floor = sliverFloor(rateYUpper(points, peer))
         return Chart {
             ForEach(points) { point in
                 ForEach(order) { entry in
-                    let value = point.byModel[entry.model] ?? 0
                     AreaMark(x: .value("Time", point.x),
-                             y: .value("Tokens", value >= floor ? value : 0))
+                             y: .value("Tokens", point.byModel[entry.model] ?? 0))
                         .foregroundStyle(by: .value("Model", entry.model))
-                        .interpolationMethod(.monotone)
+                        .interpolationMethod(Self.stackInterpolation)
                 }
             }
             peerOverlay(peer)
