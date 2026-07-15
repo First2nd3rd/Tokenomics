@@ -29,6 +29,15 @@ struct DashboardView: View {
     /// instead of being auto-centered), with a floor of 1 and a little headroom.
     private func yUpper(_ peak: Int) -> Int { max(Int(Double(peak) * 1.08), 1) }
 
+    /// A stacked band thinner than ~2% of the y-range is under a pixel or two on an
+    /// 84pt chart: its color can't show, so it renders as a dark outline hugging the
+    /// flanks of taller spikes. Values below this floor are drawn as zero.
+    private static let bandSliverFraction = 0.02
+
+    private func sliverFloor(_ upper: Int) -> Int {
+        Int(Double(upper) * Self.bandSliverFraction)
+    }
+
     private func rateYUpper(_ points: [RatePoint], _ peer: [LivePoint]) -> Int {
         yUpper(max(points.map(\.total).max() ?? 0, peer.map(\.total).max() ?? 0))
     }
@@ -203,10 +212,12 @@ struct DashboardView: View {
 
     /// Optional: a smooth area stacked by token type (cache-read usually dominates).
     private func stackedRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
-        Chart {
+        let floor = sliverFloor(rateYUpper(points, peer))
+        return Chart {
             ForEach(points) { point in
                 ForEach(ChartKit.tokenBands, id: \.name) { band in
-                    AreaMark(x: .value("Time", point.x), y: .value("Tokens", band.value(point.counts)))
+                    let value = band.value(point.counts)
+                    AreaMark(x: .value("Time", point.x), y: .value("Tokens", value >= floor ? value : 0))
                         .foregroundStyle(by: .value("Type", band.name))
                         .interpolationMethod(.monotone)
                 }
@@ -241,11 +252,13 @@ struct DashboardView: View {
 
     private func modelRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
         let order = modelColorOrder
+        let floor = sliverFloor(rateYUpper(points, peer))
         return Chart {
             ForEach(points) { point in
                 ForEach(order) { entry in
+                    let value = point.byModel[entry.model] ?? 0
                     AreaMark(x: .value("Time", point.x),
-                             y: .value("Tokens", point.byModel[entry.model] ?? 0))
+                             y: .value("Tokens", value >= floor ? value : 0))
                         .foregroundStyle(by: .value("Model", entry.model))
                         .interpolationMethod(.monotone)
                 }
