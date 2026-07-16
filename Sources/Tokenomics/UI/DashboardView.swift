@@ -29,17 +29,60 @@ struct DashboardView: View {
     /// instead of being auto-centered), with a floor of 1 and a little headroom.
     private func yUpper(_ peak: Int) -> Int { max(Int(Double(peak) * 1.08), 1) }
 
-    /// Interpolation for the STACKED area charts — keep it a POLYLINE method.
-    /// Under a curved method a band whose value is ZERO still paints a hairline along
-    /// the silhouette of the bands below it, so a model that never ran shows up as an
-    /// outline tracing another model's spikes; real bands also come out too thick.
-    /// Measured against the analytic band geometry, `.linear` tracks true thickness
-    /// (slope 0.94) while `.monotone` adds ~3px wherever the stack below is steep and
-    /// inflates the rest ~12%. `.stepEnd` is equally clean; `.monotone`, `.cardinal`
-    /// and `.catmullRom` all reproduce it — the polyline/curve split is what's
-    /// verified, the reason inside Charts is not. Only stacking triggers this, so the
-    /// unstacked marks (line style, peer overlay, cumulative lines) keep `.monotone`.
-    private static let stackInterpolation: InterpolationMethod = .linear
+    /// The stacked area charts draw their bands as MANUALLY stacked, `.linear`
+    /// polylines (`AreaMark(x:yStart:yEnd:)`), never as auto-stacked curved marks.
+    /// Two verified failure modes force this: a curved method (`.monotone` etc.)
+    /// paints a hairline in a band's color along the silhouette of the bands below
+    /// it wherever the band's own value is zero — a model that never ran shows up
+    /// outlining another model's spikes — and the same phantom appears for linear
+    /// auto-stacking once vertex spacing drops under ~2.5 device px (288 samples
+    /// clean, 576 hairlined on this plot). Manual stacking sidesteps both: the
+    /// smooth look comes from resampling each band through a monotone cubic in DATA
+    /// space (`MonotoneCubic`), and a band simply emits NO marks across its zero
+    /// runs (the spline is exactly zero there), so a degenerate strip never reaches
+    /// the rasterizer at any density. Unstacked marks (line style, peer overlay,
+    /// cumulative lines) are unaffected and keep `.monotone`.
+    private struct BandSlice: Identifiable {
+        let id: Int
+        let x: Double
+        let y0: Double
+        let y1: Double
+    }
+
+    /// Per-band dense slices of the smoothed stack, plus the plotted peak (for the
+    /// y-scale). Bands are smoothed independently on a shared dense grid; each
+    /// band's floor is the sum of the smoothed bands below it; samples whose
+    /// thickness is zero are dropped except run-boundary anchors (so each run rises
+    /// from and returns to the stack floor cleanly).
+    private static func smoothedSlices<Band>(_ points: [RatePoint], bands: [Band],
+                                             value: (RatePoint, Band) -> Int)
+        -> (slices: [[BandSlice]], peak: Double) {
+        let xs = points.map(\.x)
+        let subdivisions = max(1, min(4, 576 / max(points.count, 1)))
+        let dense = MonotoneCubic.denseXs(xs, subdivisions: subdivisions)
+        var base = [Double](repeating: 0, count: dense.count)
+        var peak = 0.0
+        let slices: [[BandSlice]] = bands.map { band in
+            let ys = MonotoneCubic.resample(xs: xs, ys: points.map { Double(value($0, band)) }, at: dense)
+            var out: [BandSlice] = []
+            for i in dense.indices {
+                let active = ys[i] > 0
+                let boundary = (i > 0 && ys[i - 1] > 0) || (i + 1 < ys.count && ys[i + 1] > 0)
+                if active || boundary {
+                    out.append(BandSlice(id: i, x: dense[i], y0: base[i], y1: base[i] + ys[i]))
+                }
+                base[i] += ys[i]
+                peak = max(peak, base[i])
+            }
+            return out
+        }
+        return (slices, peak)
+    }
+
+    /// Y upper bound for a smoothed stack: the peak of what is actually plotted.
+    private func stackYUpper(_ peak: Double, _ peer: [LivePoint]) -> Int {
+        yUpper(max(Int(peak.rounded()), peer.map(\.total).max() ?? 0))
+    }
 
     private func rateYUpper(_ points: [RatePoint], _ peer: [LivePoint]) -> Int {
         yUpper(max(points.map(\.total).max() ?? 0, peer.map(\.total).max() ?? 0))
@@ -213,14 +256,16 @@ struct DashboardView: View {
         .frame(width: 380, height: 84)
     }
 
-    /// Optional: an area stacked by token type (cache-read usually dominates).
+    /// Optional: a smooth area stacked by token type (cache-read usually dominates).
     private func stackedRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
-        Chart {
-            ForEach(points) { point in
-                ForEach(ChartKit.tokenBands, id: \.name) { band in
-                    AreaMark(x: .value("Time", point.x), y: .value("Tokens", band.value(point.counts)))
+        let stack = Self.smoothedSlices(points, bands: ChartKit.tokenBands) { $1.value($0.counts) }
+        return Chart {
+            ForEach(Array(ChartKit.tokenBands.enumerated()), id: \.element.name) { i, band in
+                ForEach(stack.slices[i]) { s in
+                    AreaMark(x: .value("Time", s.x),
+                             yStart: .value("From", s.y0), yEnd: .value("Tokens", s.y1))
                         .foregroundStyle(by: .value("Type", band.name))
-                        .interpolationMethod(Self.stackInterpolation)
+                        .interpolationMethod(.linear)
                 }
             }
             peerOverlay(peer)
@@ -228,7 +273,7 @@ struct DashboardView: View {
         .chartForegroundStyleScale(domain: ChartKit.tokenBands.map(\.name), range: ChartKit.tokenBands.map(\.color))
         .chartLegend(.hidden)
         .chartXScale(domain: axis.domain)
-        .chartYScale(domain: 0...rateYUpper(points, peer))
+        .chartYScale(domain: 0...Double(stackYUpper(stack.peak, peer)))
         .chartXAxis { rateXAxis(axis) }
         .chartYAxis { tokenAxis }
         .frame(width: 380, height: 84)
@@ -253,13 +298,14 @@ struct DashboardView: View {
 
     private func modelRateChart(_ points: [RatePoint], _ peer: [LivePoint], _ axis: RateAxis) -> some View {
         let order = modelColorOrder
+        let stack = Self.smoothedSlices(points, bands: order) { $0.byModel[$1.model] ?? 0 }
         return Chart {
-            ForEach(points) { point in
-                ForEach(order) { entry in
-                    AreaMark(x: .value("Time", point.x),
-                             y: .value("Tokens", point.byModel[entry.model] ?? 0))
+            ForEach(Array(order.enumerated()), id: \.element.model) { i, entry in
+                ForEach(stack.slices[i]) { s in
+                    AreaMark(x: .value("Time", s.x),
+                             yStart: .value("From", s.y0), yEnd: .value("Tokens", s.y1))
                         .foregroundStyle(by: .value("Model", entry.model))
-                        .interpolationMethod(Self.stackInterpolation)
+                        .interpolationMethod(.linear)
                 }
             }
             peerOverlay(peer)
@@ -267,7 +313,7 @@ struct DashboardView: View {
         .chartForegroundStyleScale(domain: order.map(\.model), range: order.map(\.color))
         .chartLegend(.hidden)
         .chartXScale(domain: axis.domain)
-        .chartYScale(domain: 0...rateYUpper(points, peer))
+        .chartYScale(domain: 0...Double(stackYUpper(stack.peak, peer)))
         .chartXAxis { rateXAxis(axis) }
         .chartYAxis { tokenAxis }
         .frame(width: 380, height: 84)
