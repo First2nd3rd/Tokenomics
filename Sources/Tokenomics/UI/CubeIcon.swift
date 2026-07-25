@@ -3,6 +3,7 @@ import AppKit
 /// The menu-bar mark: the app icon's minimal unit — a single soft 3-D cube —
 /// rendered at status-bar size. Selectable in Settings.
 enum MenuBarIcon: String, CaseIterable, Identifiable {
+    case hidden    // no image — the two-line numbers stand alone (narrowest)
     case solid     // three teal faces, crisp edges
     case soft      // three teal faces, gently bowed edges (matches the artwork)
     case outline   // monochrome line-art cube (template — follows the menu-bar appearance)
@@ -10,6 +11,7 @@ enum MenuBarIcon: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
+        case .hidden:  return "None"
         case .solid:   return "Cube"
         case .soft:    return "Cube (soft)"
         case .outline: return "Outline"

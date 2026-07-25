@@ -55,9 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         if let button = statusItem.button {
-            button.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            button.imagePosition = .imageLeading
-            button.title = " …"
+            button.imagePosition = .imageOnly
             button.target = self
             button.action = #selector(statusClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -98,13 +96,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Set the status-item image from the chosen style (only when it changed).
+    /// Re-render the status image when the icon style picker changed.
     private var appliedIconStyle: MenuBarIcon?
     private func applyMenuBarIcon() {
-        let style = MenuBarIcon(rawValue: UserDefaults.standard.string(forKey: "menuBarIcon") ?? "") ?? .solid
+        let style = Self.iconStyle()
         guard style != appliedIconStyle else { return }
         appliedIconStyle = style
-        statusItem.button?.image = style.image()
+        renderStatusItem()
+    }
+
+    private static func iconStyle() -> MenuBarIcon {
+        MenuBarIcon(rawValue: UserDefaults.standard.string(forKey: "menuBarIcon") ?? "") ?? .hidden
+    }
+
+    /// The whole status item is ONE image (optional cube + two text lines):
+    /// NSStatusBarButton centers images correctly at any menu-bar height
+    /// (notched Macs are ~33pt), which a multi-line title is not.
+    private func renderStatusItem() {
+        statusItem.button?.image = StatusImage.make(lastStatusLines, icon: Self.iconStyle())
     }
 
     // MARK: - Refresh
@@ -182,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let series = IntradayCurve.build(matrix: matrix, now: now)
 
         // Headline.
-        statusItem.button?.title = Self.statusTitle(dashboard, series: series)
+        updateStatusText(dashboard, now: now)
         if dashboard.headline != nil {
             model.headline = Self.headlineText(dashboard)
             model.subtitle = Self.subtitleText(dashboard, series: series)
@@ -213,16 +222,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.dailyBars = Array(snapshot.days.suffix(Self.dailyBarDays))
     }
 
-    /// Menu-bar text: today's tokens (monospaced digits) + a trend arrow when
-    /// today is projected above (▲) / below (▼) the 7-day average — matching the
-    /// popover's `vs 7d`. Leading space separates it from the cube image.
-    private static func statusTitle(_ d: Dashboard, series: IntradayCurve.Series) -> String {
-        guard let h = d.headline else { return " —" }
-        var title = " " + Format.tokensShort(h.totalTokens)
-        if d.hasUsageToday, let projected = series.projectedTotal, let avg = d.avgTokens, avg > 0 {
-            title += projected >= avg ? " ▲" : " ▼"
+    /// Today's total from the previous refresh, for the menu bar's live "+X"
+    /// increment. Day-keyed so the midnight rollover shows cost, not a bogus delta.
+    private var lastStatusSample: (day: String, tokens: Int)?
+    private var lastStatusLines = StatusLine.Lines(top: "—", bottom: "")
+
+    /// Menu-bar text: two stacked lines — today's tokens on top; the freshly
+    /// added tokens below while usage is flowing, today's cost when idle.
+    private func updateStatusText(_ d: Dashboard, now: Date) {
+        let today = DayBucket.dayKey(now)
+        var delta: Int?
+        if let h = d.headline {
+            if let last = lastStatusSample, last.day == today {
+                delta = h.totalTokens - last.tokens
+            }
+            lastStatusSample = (today, h.totalTokens)
+        } else {
+            lastStatusSample = nil
         }
-        return title
+        lastStatusLines = StatusLine.make(totalTokens: d.headline?.totalTokens,
+                                          cost: d.headline?.totalCost, delta: delta)
+        renderStatusItem()
     }
 
     private static func headlineText(_ d: Dashboard) -> String {
