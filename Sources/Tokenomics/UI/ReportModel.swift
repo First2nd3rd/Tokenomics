@@ -23,11 +23,19 @@ final class ReportModel: ObservableObject {
         !period.range(containing: anchor).contains(Date())
     }
 
+    /// Loads run on a concurrent queue and can finish out of order (rapid period
+    /// stepping); the generation stamp drops completions for superseded requests
+    /// so a slow older load can't overwrite a newer period's data.
+    private var generation = 0
+
     func reload() {
+        generation += 1
+        let requested = generation
         isLoading = true
         loader(period, anchor) { [weak self] report in
-            self?.report = report
-            self?.isLoading = false
+            guard let self, self.generation == requested else { return }
+            self.report = report
+            self.isLoading = false
         }
     }
 

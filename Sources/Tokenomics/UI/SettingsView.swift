@@ -38,156 +38,153 @@ final class LoginItemModel: ObservableObject {
     }
 }
 
-struct SettingsView: View {
+// MARK: - General
+
+struct GeneralPane: View {
     @ObservedObject var login: LoginItemModel
-    @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
     @AppStorage("menuBarIcon") private var menuBarIcon: MenuBarIcon = .solid
-    @AppStorage(CostBasisStore.claudePlanKey) private var claudePlan: ClaudePlan = .api
-    @AppStorage(CostBasisStore.gptPlanKey) private var gptPlan: GPTPlan = .api
-    @AppStorage(CostBasisStore.claudeCustomKey) private var claudeCustomFee: Double = 100
-    @AppStorage(CostBasisStore.gptCustomKey) private var gptCustomFee: Double = 20
+    @AppStorage("rateChartStyle") private var rateStyle: RateChartStyle = .line
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Launch at Login",
+                       isOn: Binding(get: { login.enabled }, set: { login.setEnabled($0) }))
+            } footer: {
+                Text("Start Tokenomics automatically when you log in.")
+            }
+
+            Section {
+                Picker("Menu bar icon", selection: $menuBarIcon) {
+                    ForEach(MenuBarIcon.allCases) { Text($0.label).tag($0) }
+                }
+                Picker("Rate chart", selection: $rateStyle) {
+                    ForEach(RateChartStyle.allCases) { Text($0.label).tag($0) }
+                }
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("The cube mark shown in the menu bar, and how the dashboard's intraday usage chart is drawn.")
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { login.refresh() }
+    }
+}
+
+// MARK: - Data & Sync
+
+struct DataPane: View {
     @AppStorage("syncEnabled") private var syncEnabled = false
     @AppStorage(DeviceIdentity.displayNameKey) private var machineName = ""
     @AppStorage("archiveEnabled") private var archiveEnabled = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Settings")
-                .font(.system(size: 15, weight: .semibold))
-
-            row("Launch at Login",
-                subtitle: "Start Tokenomics automatically when you log in.") {
-                Toggle("", isOn: Binding(get: { login.enabled }, set: { login.setEnabled($0) }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-            }
-
-            row("Rate chart",
-                subtitle: "How the intraday usage chart is drawn.") {
-                Picker("", selection: $rateStyle) {
-                    ForEach(RateChartStyle.allCases) { Text($0.label).tag($0) }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                .fixedSize()
-            }
-
-            row("Menu bar icon",
-                subtitle: "The cube mark shown in the menu bar.") {
-                Picker("", selection: $menuBarIcon) {
-                    ForEach(MenuBarIcon.allCases) { Text($0.label).tag($0) }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                .fixedSize()
-            }
-
-            Divider().padding(.vertical, 2)
-            Text("Cross-machine sync")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-
-            row("Sync across Macs",
-                subtitle: "Aggregate usage from your other Macs via iCloud Drive. Only token counts leave this Mac — never prompts, file paths, or keys — and nothing is sent until you turn this on.") {
-                Toggle("", isOn: $syncEnabled)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-            }
-            if syncEnabled && ICloudDriveFolder().directoryURL == nil {
-                Text("iCloud Drive looks turned off — sync stays local-only. Enable it in System Settings → Apple ID → iCloud → iCloud Drive.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-            if syncEnabled {
-                row("This Mac's name",
-                    subtitle: "Identifies this Mac to your other Macs.") {
-                    TextField("", text: $machineName,
+        Form {
+            Section {
+                Toggle("Sync across Macs", isOn: $syncEnabled)
+                if syncEnabled {
+                    TextField("This Mac's name", text: $machineName,
                               prompt: Text(Host.current().localizedName ?? "This Mac"))
-                        .frame(width: 140)
-                        .textFieldStyle(.roundedBorder)
-                        .controlSize(.small)
+                        .multilineTextAlignment(.trailing)
+                }
+            } header: {
+                Text("Cross-Machine Sync")
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Aggregate usage from your other Macs via iCloud Drive. Only token counts leave this Mac — never prompts, file paths, or keys — and nothing is sent until you turn this on.")
+                    if syncEnabled {
+                        Text("The name identifies this Mac to your other Macs.")
+                    }
+                    if syncEnabled && ICloudDriveFolder().directoryURL == nil {
+                        Text("iCloud Drive looks turned off — sync stays local-only. Enable it in System Settings → Apple ID → iCloud → iCloud Drive.")
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
 
-            Divider().padding(.vertical, 2)
-            Text("History archive")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-
-            row("Keep a usage history",
-                subtitle: "Preserve a permanent daily/monthly history on this Mac so reports survive Claude clearing its logs. Only token counts are stored — never prompts, file paths, or keys — in Application Support, about 5 MB per month.") {
-                Toggle("", isOn: $archiveEnabled)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
+            Section {
+                Toggle("Keep a usage history", isOn: $archiveEnabled)
+            } header: {
+                Text("History Archive")
+            } footer: {
+                Text("Preserve a permanent daily/monthly history on this Mac so reports survive Claude clearing its logs. Only token counts are stored — about 5 MB per month in Application Support.")
             }
-
-            Divider().padding(.vertical, 2)
-            Text("Subscription — for break-even")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-
-            row("Claude plan",
-                subtitle: "Compared against Claude's API-equivalent cost.") {
-                planPicker($claudePlan)
-            }
-            if claudePlan == .custom { customFeeField($claudeCustomFee) }
-
-            row("GPT plan",
-                subtitle: "Compared against Codex/GPT's API-equivalent cost.") {
-                planPicker($gptPlan)
-            }
-            if gptPlan == .custom { customFeeField($gptCustomFee) }
-
-            Spacer(minLength: 0)
         }
-        .padding(20)
-        .frame(width: 380, height: 640, alignment: .topLeading)
-        .onAppear { login.refresh() }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Subscription
+
+struct SubscriptionPane: View {
+    @AppStorage(CostBasisStore.claudePlanKey) private var claudePlan: ClaudePlan = .api
+    @AppStorage(CostBasisStore.gptPlanKey) private var gptPlan: GPTPlan = .api
+    @AppStorage(CostBasisStore.claudeCustomKey) private var claudeCustomFee: Double = 100
+    @AppStorage(CostBasisStore.gptCustomKey) private var gptCustomFee: Double = 20
+
+    var body: some View {
+        Form {
+            Section {
+                planPicker("Claude plan", $claudePlan)
+                if claudePlan == .custom { feeField($claudeCustomFee) }
+            } footer: {
+                Text("Compared against Claude's API-equivalent cost to show this month's subscription break-even on the dashboard.")
+            }
+
+            Section {
+                planPicker("GPT plan", $gptPlan)
+                if gptPlan == .custom { feeField($gptCustomFee) }
+            } footer: {
+                Text("Compared against Codex/GPT's API-equivalent cost.")
+            }
+        }
+        .formStyle(.grouped)
     }
 
-    /// A menu picker over any SubscriptionPlan enum (Claude / GPT share this).
-    private func planPicker<P: SubscriptionPlan>(_ selection: Binding<P>) -> some View {
-        Picker("", selection: selection) {
+    /// A picker over any SubscriptionPlan enum (Claude / GPT share this).
+    private func planPicker<P: SubscriptionPlan>(_ title: String, _ selection: Binding<P>) -> some View {
+        Picker(title, selection: selection) {
             ForEach(Array(P.allCases)) { Text($0.label).tag($0) }
         }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .controlSize(.small)
-        .fixedSize()
     }
 
-    /// Right-aligned "$ ___ / mo" field, shown when a vendor's plan is Custom.
-    private func customFeeField(_ value: Binding<Double>) -> some View {
-        HStack(spacing: 6) {
-            Spacer()
-            Text("$").foregroundStyle(.secondary)
-            TextField("", value: value, format: .number)
-                .frame(width: 70)
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.small)
-                .multilineTextAlignment(.trailing)
-            Text("/ mo").foregroundStyle(.secondary)
-        }
-        .font(.caption)
+    /// Monthly fee row, shown when a vendor's plan is Custom.
+    private func feeField(_ value: Binding<Double>) -> some View {
+        TextField("Monthly fee", value: value, format: .currency(code: "USD"))
+            .multilineTextAlignment(.trailing)
+    }
+}
+
+// MARK: - About
+
+struct AboutPane: View {
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     }
 
-    /// One settings line: title (+ subtitle) on the left, control right-aligned.
-    /// Reusable as the panel grows.
-    private func row<Control: View>(_ title: String,
-                                    subtitle: String,
-                                    @ViewBuilder control: () -> Control) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13))
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+    var body: some View {
+        Form {
+            Section {
+                VStack(spacing: 6) {
+                    Image(nsImage: MenuBarIcon.soft.image(height: 64))
+                    Text("Tokenomics")
+                        .font(.title3.weight(.semibold))
+                    Text("Version \(version)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Claude & Codex token usage, live in your menu bar.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
             }
-            Spacer(minLength: 8)
-            control()
+
+            Section {
+                Link("Tokenomics on GitHub",
+                     destination: URL(string: "https://github.com/First2nd3rd/Tokenomics")!)
+            }
         }
+        .formStyle(.grouped)
     }
 }

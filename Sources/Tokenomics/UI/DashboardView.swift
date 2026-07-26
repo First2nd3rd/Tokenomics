@@ -136,9 +136,9 @@ struct DashboardView: View {
                 Button("Refresh", action: onRefresh)
                 Spacer()
                 Button(action: onReport) {
-                    Image(systemName: "calendar")
+                    Image(systemName: "chart.bar.xaxis")
                 }
-                .help("Reports")
+                .help("Statistics")
                 Button(action: onSettings) {
                     Image(systemName: "gearshape")
                 }

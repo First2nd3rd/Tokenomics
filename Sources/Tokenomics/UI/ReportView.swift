@@ -1,33 +1,42 @@
 import SwiftUI
 import AppKit
 
-/// The report window: a day / week / month usage breakdown read from the durable
-/// archive. This Mac only (see the note when sync is on). Presentation only — every
-/// figure comes from `PeriodReport`.
+/// The Statistics pane of the unified settings window: a day / week / month usage
+/// breakdown read from the durable archive. This Mac only (see the note when sync
+/// is on). Presentation only — every figure comes from `PeriodReport`.
 struct ReportView: View {
     @ObservedObject var model: ReportModel
     @State private var copied = false
 
-    private let width: CGFloat = 520
-    private var chartWidth: CGFloat { width - 40 }
+    /// Charts draw at explicit widths (see ChartKit); sized to the settings
+    /// window's detail column.
+    private let chartWidth = SettingsWindowMetrics.detailContentWidth
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                header
-                if let report = model.report, report.total.total > 0 {
-                    content(report)
-                } else {
+        Form {
+            Section { header }
+            if let report = model.report, report.total.total > 0 {
+                content(report)
+            } else if model.isLoading {
+                // Nothing (or an empty period) shown yet — spinner, not a
+                // premature "No usage", while the new period loads.
+                Section {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                }
+            } else {
+                Section {
                     Text("No usage recorded in this period.")
                         .font(.callout).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 140)
+                        .frame(maxWidth: .infinity, minHeight: 120)
                 }
             }
-            .padding(20)
-            .frame(width: width, alignment: .leading)
         }
-        .frame(width: width, height: 660)
-        .onAppear { if model.report == nil { model.reload() } }
+        .formStyle(.grouped)
+        .onAppear {
+            model.syncOn = UserDefaults.standard.bool(forKey: "syncEnabled")
+            model.reload()
+        }
         .onChange(of: model.report?.key) { _, _ in copied = false }
     }
 
@@ -35,14 +44,11 @@ struct ReportView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Usage Report").font(.system(size: 16, weight: .semibold))
-                Spacer()
-                Picker("", selection: $model.period) {
-                    ForEach(ReportPeriod.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented).labelsHidden().fixedSize()
+            Picker("", selection: $model.period) {
+                ForEach(ReportPeriod.allCases) { Text($0.label).tag($0) }
             }
+            .pickerStyle(.segmented).labelsHidden()
+
             HStack(spacing: 14) {
                 Button { model.step(-1) } label: { Image(systemName: "chevron.left") }
                     .buttonStyle(.borderless)
@@ -56,23 +62,28 @@ struct ReportView: View {
                 if model.isLoading { ProgressView().controlSize(.small) }
             }
         }
+        .padding(.vertical, 2)
     }
 
     // MARK: - Content
 
     @ViewBuilder private func content(_ r: PeriodReport) -> some View {
-        headline(r)
-        notes(r)
-        section("Daily") { ChartKit.dailyBars(r.days, width: chartWidth); ChartKit.tokenLegend() }
-        if !r.byVendor.isEmpty { section("By vendor") { vendorRows(r) } }
-        if !r.byModel.isEmpty { section("By model") { modelRows(r) } }
-        section("Stats") { statsGrid(r) }
-        HStack {
-            Button(copied ? "Copied ✓" : "Copy as Markdown") { copyMarkdown(r) }
-                .controlSize(.small)
-            Spacer()
+        Section {
+            headline(r)
         }
-        .padding(.top, 4)
+        Section("Daily") {
+            VStack(alignment: .leading, spacing: 8) {
+                ChartKit.dailyBars(r.days, width: chartWidth)
+                ChartKit.tokenLegend()
+            }
+            .padding(.vertical, 2)
+        }
+        if !r.byVendor.isEmpty { Section("By Vendor") { vendorRows(r) } }
+        if !r.byModel.isEmpty { Section("By Model") { modelRows(r) } }
+        Section("Stats") { statsGrid(r) }
+        Section {
+            Button(copied ? "Copied ✓" : "Copy as Markdown") { copyMarkdown(r) }
+        }
     }
 
     private func copyMarkdown(_ r: PeriodReport) {
@@ -98,19 +109,19 @@ struct ReportView: View {
                         .font(.caption).foregroundStyle(Color.accentColor)
                 }
             }
+            notes(r)
         }
+        .padding(.vertical, 2)
     }
 
-    private func notes(_ r: PeriodReport) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if model.syncOn {
-                Text("This Mac only — excludes the other Macs shown on the dashboard.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-            if !r.pricesFrozen {
-                Text("Costs estimated at current prices.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
+    @ViewBuilder private func notes(_ r: PeriodReport) -> some View {
+        if model.syncOn {
+            Text("This Mac only — excludes the other Macs shown on the dashboard.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        if !r.pricesFrozen {
+            Text("Costs estimated at current prices.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 
@@ -134,6 +145,7 @@ struct ReportView: View {
                 }
             }
         }
+        .padding(.vertical, 2)
     }
 
     private func modelRows(_ r: PeriodReport) -> some View {
@@ -146,6 +158,7 @@ struct ReportView: View {
             ForEach(top) { m in modelRow(ModelColors.shortName(m.model), m.tokens, m.cost, max: maxTokens) }
             if restTokens > 0 { modelRow("Other", restTokens, restCost, max: maxTokens) }
         }
+        .padding(.vertical, 2)
     }
 
     private func modelRow(_ name: String, _ tokens: Int, _ cost: Double, max maxTokens: Int) -> some View {
@@ -179,17 +192,10 @@ struct ReportView: View {
                 }
             }
         }
+        .padding(.vertical, 2)
     }
 
     // MARK: - Helpers
-
-    private func section<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary).kerning(0.5)
-            content()
-        }
-    }
 
     /// Match the dashboard's vendor palette (Claude orange, GPT teal).
     private func vendorColor(_ vendor: String) -> Color {

@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let popover = NSPopover()
     private let loginItem = LoginItemModel()
     private var settingsWindow: NSWindow?
-    private var reportWindow: NSWindow?
+    private let paneModel = SettingsPaneModel()
     private lazy var reportModel = ReportModel { [weak self] period, anchor, completion in
         guard let self else { completion(nil); return }
         self.store.report(period: period, anchor: anchor, completion: completion)
@@ -37,6 +37,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             CostBasisStore.claudeCustomKey: 100,
             CostBasisStore.gptCustomKey: 20,
             "archiveEnabled": true,
+            // Keep the engine's fallback and the Settings picker's default in
+            // agreement — without this, a fresh install shows "Cube" selected
+            // while the menu bar renders no icon.
+            "menuBarIcon": MenuBarIcon.solid.rawValue,
         ])
         lastSyncEnabled = UserDefaults.standard.bool(forKey: "syncEnabled")
         lastArchiveEnabled = UserDefaults.standard.bool(forKey: "archiveEnabled")
@@ -49,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 model: model,
                 onRefresh: { [weak self] in self?.refresh() },
                 onSettings: { [weak self] in self?.openSettings() },
-                onReport: { [weak self] in self?.openReport() },
+                onReport: { [weak self] in self?.openStatistics() },
                 onQuit: { NSApp.terminate(nil) }
             )
         )
@@ -94,6 +98,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSTimeZone.resetSystemTimeZone()
             self?.refresh()
         }
+
+        // Debug: open the unified window straight away (used by tooling to
+        // screenshot panes without clicking through the menu bar).
+        if CommandLine.arguments.contains("--open-settings") { openSettings() }
+        if CommandLine.arguments.contains("--open-statistics") { openStatistics() }
     }
 
     /// Re-render the status image when the icon style picker changed.
@@ -315,7 +324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
-        let reportItem = NSMenuItem(title: "Reports…", action: #selector(openReport), keyEquivalent: "u")
+        let reportItem = NSMenuItem(title: "Statistics…", action: #selector(openStatistics), keyEquivalent: "u")
         reportItem.target = self
         menu.addItem(reportItem)
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
@@ -330,46 +339,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = nil
     }
 
-    // MARK: - Settings
+    // MARK: - Settings window (unified: settings + statistics)
 
-    @objc private func openSettings() {
+    /// "Settings…" keeps whatever pane the window was on; "Statistics…" jumps there.
+    @objc private func openSettings() { openWindow(jumpTo: nil) }
+    @objc private func openStatistics() { openWindow(jumpTo: .statistics) }
+
+    /// One System Settings-style window for everything: a sidebar of panes
+    /// (General, Statistics, Data & Sync, Subscription, About). Menu items and the
+    /// popover buttons deep-link to a pane. `sceneBridgingOptions` lets SwiftUI
+    /// drive the window's toolbar and title, giving the native full-height-sidebar
+    /// look with the pane name in the title bar.
+    private func openWindow(jumpTo pane: SettingsPane?) {
         if settingsWindow == nil {
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 380, height: 640),
-                styleMask: [.titled, .closable],
-                backing: .buffered, defer: false
-            )
-            window.title = "Tokenomics"
+            let hosting = NSHostingController(
+                rootView: SettingsRootView(panes: paneModel, login: loginItem, report: reportModel))
+            hosting.sceneBridgingOptions = [.toolbars, .title]
+            let window = NSWindow(contentViewController: hosting)
+            window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
             window.isReleasedWhenClosed = false
-            window.contentViewController = NSHostingController(rootView: SettingsView(login: loginItem))
             window.center()
             settingsWindow = window
+        }
+        // The statistics pane reloads in onAppear; that misses one case — the
+        // window is already open showing Statistics — so refresh it here then.
+        let alreadyOnStatistics = paneModel.pane == .statistics
+            && settingsWindow?.isVisible == true
+        if let pane { paneModel.pane = pane }
+        if pane == .statistics && alreadyOnStatistics {
+            reportModel.syncOn = UserDefaults.standard.bool(forKey: "syncEnabled")
+            reportModel.reload()
         }
         loginItem.refresh()
         popover.performClose(nil)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
-    }
-
-    // MARK: - Reports
-
-    @objc private func openReport() {
-        if reportWindow == nil {
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 660),
-                styleMask: [.titled, .closable],
-                backing: .buffered, defer: false
-            )
-            window.title = "Usage Report"
-            window.isReleasedWhenClosed = false
-            window.contentViewController = NSHostingController(rootView: ReportView(model: reportModel))
-            window.center()
-            reportWindow = window
-        }
-        reportModel.syncOn = UserDefaults.standard.bool(forKey: "syncEnabled")
-        reportModel.reload()
-        popover.performClose(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        reportWindow?.makeKeyAndOrderFront(nil)
     }
 }
