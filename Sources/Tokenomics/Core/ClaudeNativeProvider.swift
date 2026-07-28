@@ -20,11 +20,12 @@ final class ClaudeNativeProvider: UsageProvider {
 
     private static let usageNeedle = Data("input_tokens".utf8)
 
-    /// Per-file parse cache (mtime+size keyed) with NDJSON persistence. The version
-    /// in the filename is the format version — bump it if `UsageRecord` or the
-    /// parsing semantics change.
-    private let cache = FileRecordCache<UsageRecord>(diskFileName: "records-v3.ndjson",
-                                                     queueLabel: "tokenomics.claude-reader")
+    /// Per-file parse cache (mtime+size keyed), persisted one-file-per-source. The
+    /// version in the directory name is the format version — bump it if
+    /// `UsageRecord` or the parsing semantics change.
+    private let cache = FileRecordCache<UsageRecord>(cacheDirectoryName: "records-v4",
+                                                     queueLabel: "tokenomics.claude-reader",
+                                                     legacyFiles: ["records-v3.ndjson"])
 
     /// Raw, pre-dedup records; the union + single `Dedup.collapse` happens upstream.
     func fetchRecords(completion: @escaping ([UsageRecord]) -> Void) {

@@ -27,6 +27,14 @@ private struct RecordStub: UsageProvider {
     func fetchRecords(completion: @escaping ([UsageRecord]) -> Void) { completion(records) }
 }
 
+/// A provider whose record list the test mutates between calls.
+private final class GrowingStub: UsageProvider {
+    let id: String
+    var records: [UsageRecord]
+    init(id: String, records: [UsageRecord]) { self.id = id; self.records = records }
+    func fetchRecords(completion: @escaping ([UsageRecord]) -> Void) { completion(records) }
+}
+
 @Suite("UsageStore wiring")
 struct UsageStoreTests {
 
@@ -88,6 +96,52 @@ struct UsageStoreTests {
         let localTokens = localMatrix.values.flatMap { $0 }.reduce(0) { $0 + $1.counts.total }
         #expect(combinedTokens == 60)     // 10 local + 50 peer (full-day chart + cumulative)
         #expect(localTokens == 10)        // local only — the live chart's true height
+    }
+
+    @Test("refreshTick derives the same views the per-surface refreshes produce")
+    func tickMatchesPerSurfaceViews() async {
+        let folder = TestFolder()
+        folder.files["tok-peer.ndjson"] = peerFile(
+            machineId: "peer", records: [record(.codex, key: "P", input: 50)])
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: folder, machineId: "own",
+                               isSyncEnabled: { true }, deliver: immediate)
+
+        let tick = await withCheckedContinuation { c in
+            store.refreshTick(lastDays: 14) { c.resume(returning: $0) }
+        }
+        let byVendor = await withCheckedContinuation { c in
+            store.refreshByVendor { c.resume(returning: $0) }
+        }
+        let machines = await withCheckedContinuation { c in
+            store.refreshMachines { c.resume(returning: $0) }
+        }
+
+        #expect(tick.byVendor == byVendor)
+        #expect(tick.machines.map(\.id) == machines.map(\.id))
+        #expect(tick.machines.map(\.todayTokens) == machines.map(\.todayTokens))
+        let combinedTokens = tick.matrixCombined.values.flatMap { $0 }.reduce(0) { $0 + $1.counts.total }
+        let localTokens = tick.matrixLocal.values.flatMap { $0 }.reduce(0) { $0 + $1.counts.total }
+        #expect(combinedTokens == 60)     // 10 local + 50 peer
+        #expect(localTokens == 10)        // local stream keeps peers out
+    }
+
+    @Test("refreshTick excludes peers and machines when sync is off")
+    func tickSyncGating() async {
+        let folder = TestFolder()
+        folder.files["tok-peer.ndjson"] = peerFile(
+            machineId: "peer", records: [record(.codex, key: "P", input: 50)])
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: folder, machineId: "own",
+                               isSyncEnabled: { false }, deliver: immediate)
+
+        let tick = await withCheckedContinuation { c in
+            store.refreshTick(lastDays: 14) { c.resume(returning: $0) }
+        }
+        #expect(tick.byVendor["codex"] == nil)
+        #expect(tick.machines.isEmpty)
+        let combinedTokens = tick.matrixCombined.values.flatMap { $0 }.reduce(0) { $0 + $1.counts.total }
+        #expect(combinedTokens == 10)
     }
 
     @Test("flushPublish writes this machine's file only when sync is enabled")
@@ -170,6 +224,40 @@ struct UsageStoreTests {
                                deliver: immediate)
         store.flushLocal()
         #expect(af.files.isEmpty)
+    }
+
+    @Test("persistLocal runs a real pass at most once per interval; flushLocal is exempt")
+    func persistLocalThrottles() async {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        let growing = GrowingStub(id: "claude-native", records: [record(.claude, key: "A", input: 1)])
+        let store = UsageStore(localProviders: [growing], folder: TestFolder(), archive: archive,
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { true },
+                               deliver: immediate)
+        let t0 = Date()
+
+        // Await (not semaphore-block) so this test never starves the cooperative
+        // pool the flush tests' 2s-bounded waits also run on.
+        await withCheckedContinuation { c in store.persistLocal(now: t0) { c.resume() } }
+        #expect(archive.allRecords().contains { $0.key == "A" })
+
+        // A minute later: gated — the new record must NOT be ingested yet.
+        growing.records.append(record(.claude, key: "B", input: 2))
+        await withCheckedContinuation { c in
+            store.persistLocal(now: t0.addingTimeInterval(60)) { c.resume() }
+        }
+        #expect(!archive.allRecords().contains { $0.key == "B" })
+
+        // Past the interval: a real pass runs again.
+        await withCheckedContinuation { c in
+            store.persistLocal(now: t0.addingTimeInterval(301)) { c.resume() }
+        }
+        #expect(archive.allRecords().contains { $0.key == "B" })
+
+        // Quit-time flush ignores the gate entirely.
+        growing.records.append(record(.claude, key: "C", input: 3))
+        store.flushLocal()
+        #expect(archive.allRecords().contains { $0.key == "C" })
     }
 
     @Test("the published file contains only this machine's records, not peers'")

@@ -35,16 +35,16 @@ private final class ParseCounter: @unchecked Sendable {
 }
 
 /// Per-test scratch space: a unique temp directory holding source files plus a
-/// unique on-disk cache file name. Cleaned up explicitly at the end of each test.
+/// unique on-disk cache directory name. Cleaned up explicitly at the end of each test.
 private struct Scratch {
     let dir: URL
-    let diskFileName: String
+    let cacheDirName: String
 
     init() {
         let unique = "FileRecordCacheTests-\(UUID().uuidString)"
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(unique, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        diskFileName = "records-\(UUID().uuidString).ndjson"
+        cacheDirName = "records-test-\(UUID().uuidString)"
     }
 
     /// Writes `text` to `name` inside the scratch dir and returns its URL.
@@ -77,14 +77,14 @@ private struct Scratch {
         try? FileManager.default.setAttributes([.modificationDate: future], ofItemAtPath: url.path)
     }
 
-    /// The on-disk cache path the production code computes:
-    /// caches dir + "me.stfang.tokenomics" + diskFileName.
+    /// The on-disk cache directory the production code computes:
+    /// caches dir + "me.stfang.tokenomics" + cacheDirName.
     var diskCacheURL: URL? {
         guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
         else { return nil }
         return caches
             .appendingPathComponent("me.stfang.tokenomics", isDirectory: true)
-            .appendingPathComponent(diskFileName)
+            .appendingPathComponent(cacheDirName, isDirectory: true)
     }
 
     func cleanup() {
@@ -107,7 +107,7 @@ struct FileRecordCacheTests {
         let b = scratch.writeFile("b.json", "2")
         let counter = ParseCounter()
         let cache = FileRecordCache<Rec>(
-            diskFileName: scratch.diskFileName,
+            cacheDirectoryName: scratch.cacheDirName,
             queueLabel: "test.cold"
         )
 
@@ -132,7 +132,7 @@ struct FileRecordCacheTests {
         let b = scratch.writeFile("b.json", "2")
         let counter = ParseCounter()
         let cache = FileRecordCache<Rec>(
-            diskFileName: scratch.diskFileName,
+            cacheDirectoryName: scratch.cacheDirName,
             queueLabel: "test.warm"
         )
         let parse: (URL) -> [Rec] = { url in
@@ -158,7 +158,7 @@ struct FileRecordCacheTests {
         let b = scratch.writeFile("b.json", "2")
         let counter = ParseCounter()
         let cache = FileRecordCache<Rec>(
-            diskFileName: scratch.diskFileName,
+            cacheDirectoryName: scratch.cacheDirName,
             queueLabel: "test.changed"
         )
         // parse returns a value derived from the file's current size so we can
@@ -192,7 +192,7 @@ struct FileRecordCacheTests {
         let b = scratch.writeFile("b.json", "2")
         let counter = ParseCounter()
         let cache = FileRecordCache<Rec>(
-            diskFileName: scratch.diskFileName,
+            cacheDirectoryName: scratch.cacheDirName,
             queueLabel: "test.removed"
         )
         let parse: (URL) -> [Rec] = { url in
@@ -222,7 +222,7 @@ struct FileRecordCacheTests {
         // distantPast, so this cold (changed == true) call writes to disk.
         let firstCounter = ParseCounter()
         let firstCache = FileRecordCache<Rec>(
-            diskFileName: scratch.diskFileName,
+            cacheDirectoryName: scratch.cacheDirName,
             queueLabel: "test.disk.first"
         )
         let firstOut = firstCache.records(for: [a, b]) { url in
@@ -238,7 +238,7 @@ struct FileRecordCacheTests {
         // Act: a brand-new instance with the SAME diskFileName, files unchanged.
         let secondCounter = ParseCounter()
         let secondCache = FileRecordCache<Rec>(
-            diskFileName: scratch.diskFileName,
+            cacheDirectoryName: scratch.cacheDirName,
             queueLabel: "test.disk.second"
         )
         let secondOut = secondCache.records(for: [a, b]) { url in
@@ -247,10 +247,74 @@ struct FileRecordCacheTests {
         }
 
         // Assert: loaded from disk, so parse was never invoked, and the records
-        // round-tripped intact. NDJSON line order is dictionary order, so compare
-        // as sets to stay deterministic.
+        // round-tripped intact. Per-source file order is dictionary order, so
+        // compare as sets to stay deterministic.
         #expect(secondCounter.calls == 0)
         #expect(Set(secondOut) == Set(firstOut))
         #expect(Set(secondOut) == Set([Rec(v: 1), Rec(v: 2)]))
+    }
+
+    @Test("persisting after a change rewrites only the changed source's cache file")
+    func saveIsPerSourceIncremental() throws {
+        // Arrange: throttle 0 so every call may persist immediately.
+        let scratch = Scratch()
+        defer { scratch.cleanup() }
+        let a = scratch.writeFile("a.json", "1")
+        let b = scratch.writeFile("b.json", "2")
+        let cache = FileRecordCache<Rec>(
+            cacheDirectoryName: scratch.cacheDirName,
+            queueLabel: "test.incremental",
+            saveThrottle: 0
+        )
+        let parse: (URL) -> [Rec] = { url in
+            [Rec(v: (try? Data(contentsOf: url))?.count ?? 0)]
+        }
+        _ = cache.records(for: [a, b], parse: parse)
+        let dir = try #require(scratch.diskCacheURL)
+        let cacheFiles = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasSuffix(".json") }
+        #expect(cacheFiles.count == 2)
+
+        // Plant a sentinel: overwrite every cache file with garbage. A save that
+        // touches a file destroys its sentinel, so untouched files stay garbage.
+        for name in cacheFiles {
+            try Data("sentinel".utf8).write(to: dir.appendingPathComponent(name))
+        }
+
+        // Act: change only "a" and refresh.
+        scratch.append("a.json", "XYZ")
+        _ = cache.records(for: [a, b], parse: parse)
+
+        // Assert: exactly one cache file was rewritten (a's); b's kept the sentinel.
+        let contents = try cacheFiles.map { try Data(contentsOf: dir.appendingPathComponent($0)) }
+        #expect(contents.filter { $0 == Data("sentinel".utf8) }.count == 1)
+        #expect(contents.filter { $0 != Data("sentinel".utf8) }.count == 1)
+    }
+
+    @Test("a source file that disappears has its cache file deleted on the next save")
+    func removedSourceDeletesItsCacheFile() throws {
+        // Arrange
+        let scratch = Scratch()
+        defer { scratch.cleanup() }
+        let a = scratch.writeFile("a.json", "1")
+        let b = scratch.writeFile("b.json", "2")
+        let cache = FileRecordCache<Rec>(
+            cacheDirectoryName: scratch.cacheDirName,
+            queueLabel: "test.orphan",
+            saveThrottle: 0
+        )
+        let parse: (URL) -> [Rec] = { _ in [Rec(v: 1)] }
+        _ = cache.records(for: [a, b], parse: parse)
+        let dir = try #require(scratch.diskCacheURL)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasSuffix(".json") }.count == 2)
+
+        // Act: "b" is gone from the requested set.
+        scratch.remove("b.json")
+        _ = cache.records(for: [a], parse: parse)
+
+        // Assert: its cache file was deleted too.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasSuffix(".json") }.count == 1)
     }
 }

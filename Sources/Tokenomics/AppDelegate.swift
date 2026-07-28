@@ -134,33 +134,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // all describe the same instant.
         let now = Date()
 
-        // Fetch the daily series and the minute matrix together, then present them
-        // in one pass: the headline projection is derived from the same curve the
-        // popover draws, so the number and the chart can't disagree.
-        let group = DispatchGroup()
-        var perVendor: [String: [DailyUsage]] = [:]
-        var matrix: [String: [MinuteBucket]] = [:]
-        var localMatrix: [String: [MinuteBucket]] = [:]
-
-        group.enter()
-        store.refreshByVendor { perVendor = $0; group.leave() }
-
-        group.enter()
-        store.refreshMatrix(now: now, lastDays: Self.matrixDays) { combined, local in
-            matrix = combined; localMatrix = local; group.leave()
+        // ONE records fetch + dedup per tick feeds every surface (headline, charts,
+        // by-machine view) and the throttled archive/publish pass — so the number
+        // and the chart can't disagree, and the union isn't re-collapsed per view.
+        store.refreshTick(now: now, lastDays: Self.matrixDays) { [weak self] tick in
+            guard let self else { return }
+            self.present(perVendor: tick.byVendor, matrix: tick.matrixCombined,
+                         localMatrix: tick.matrixLocal, now: now)
+            self.model.machines = tick.machines
         }
-
-        group.notify(queue: .main) { [weak self] in
-            self?.present(perVendor: perVendor, matrix: matrix, localMatrix: localMatrix, now: now)
-        }
-
-        // Per-machine breakdown for the by-machine view (empty when sync is off).
-        store.refreshMachines(now: now) { [weak self] in self?.model.machines = $0 }
-
-        // Publish this machine's records for other Macs and fold them into the durable
-        // archive — one shared fetch; each half no-ops when its feature is off or
-        // nothing changed.
-        store.persistLocal()
 
         // Freeze any newly-finalized day into the snapshot store (guarded to one real
         // sweep per day; catches the midnight rollover during a long-running session).

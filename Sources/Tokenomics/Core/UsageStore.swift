@@ -56,6 +56,67 @@ final class UsageStore {
         isSyncEnabled() ? CombinedProvider(localProviders + [peerSource]) : CombinedProvider(localProviders)
     }
 
+    /// Everything one 60s tick needs, derived from a SINGLE records fetch and a
+    /// SINGLE global dedup — previously each surface re-fetched and re-collapsed
+    /// the same union, multiplying the per-tick CPU by the number of surfaces.
+    struct TickData {
+        let byVendor: [String: [DailyUsage]]
+        let matrixCombined: [String: [MinuteBucket]]
+        let matrixLocal: [String: [MinuteBucket]]
+        let machines: [MachineSummary]
+    }
+
+    /// One-shot per-tick refresh: fetch local (+ peers when sync is on) once,
+    /// collapse once, derive every view, and run the throttled persist pass on the
+    /// same records. Delivered ready for UI.
+    func refreshTick(now: Date = Date(), lastDays: Int,
+                     completion: @escaping (TickData) -> Void) {
+        let syncOn = isSyncEnabled()
+        fetchTickRecords(syncOn: syncOn) { [weak self] local, combined in
+            guard let self else { return }
+            let collapsed = Dedup.collapse(combined)
+            let byVendor = UsageAggregator.byVendor(collapsed: collapsed)
+            let (c, l) = UsageAggregator.splitDayMinuteMatrix(collapsed: collapsed)
+            let tick = TickData(
+                byVendor: byVendor,
+                matrixCombined: DayBucket.recentDays(c, now: now, count: lastDays),
+                matrixLocal: DayBucket.recentDays(l, now: now, count: lastDays),
+                machines: syncOn ? self.machineSummaries(collapsed: collapsed, now: now) : [])
+            self.persistLocal(now: now, records: local)
+            self.deliver { completion(tick) }
+        }
+    }
+
+    /// The tick's two record streams: this Mac's union, and combined (== local when
+    /// sync is off, local + peers when on). One fetch feeds both.
+    private func fetchTickRecords(syncOn: Bool,
+                                  _ completion: @escaping (_ local: [UsageRecord],
+                                                           _ combined: [UsageRecord]) -> Void) {
+        CombinedProvider(localProviders).fetchRecords { [weak self] local in
+            guard let self, syncOn else { completion(local, local); return }
+            self.peerSource.fetchRecords { peers in completion(local, local + peers) }
+        }
+    }
+
+    /// Per-machine today totals from already-collapsed records (see refreshMachines).
+    private func machineSummaries(collapsed: [UsageRecord], now: Date) -> [MachineSummary] {
+        let today = DayBucket.dayKey(now)
+        var tokens: [String: Int] = [:]
+        for r in collapsed where DayBucket.day(epoch: r.epoch) == today {
+            let machine = r.machine ?? machineId
+            tokens[machine, default: 0] += r.input + r.output + r.cacheCreation + r.cacheRead
+        }
+        var summaries = [MachineSummary(id: machineId, name: DeviceIdentity.displayName(),
+                                        todayTokens: tokens[machineId] ?? 0,
+                                        lastSeen: Int(now.timeIntervalSince1970), isLocal: true)]
+        for info in peerSource.peerInfos() {
+            summaries.append(MachineSummary(id: info.machineId, name: info.displayName,
+                                            todayTokens: tokens[info.machineId] ?? 0,
+                                            lastSeen: info.publishedAt, isLocal: false))
+        }
+        return summaries.sorted { $0.todayTokens > $1.todayTokens }
+    }
+
     /// Per-vendor daily series (provider id → days), delivered ready for UI. The
     /// single source for both the headline and the per-vendor break-even.
     func refreshByVendor(completion: @escaping ([String: [DailyUsage]]) -> Void) {
@@ -82,21 +143,8 @@ final class UsageStore {
     func refreshMachines(now: Date = Date(), completion: @escaping ([MachineSummary]) -> Void) {
         guard isSyncEnabled() else { deliver { completion([]) }; return }
         CombinedProvider(localProviders + [peerSource]).fetchRecords { records in
-            let today = DayBucket.dayKey(now)
-            var tokens: [String: Int] = [:]
-            for r in Dedup.collapse(records) where DayBucket.day(epoch: r.epoch) == today {
-                let machine = r.machine ?? self.machineId
-                tokens[machine, default: 0] += r.input + r.output + r.cacheCreation + r.cacheRead
-            }
-            var summaries = [MachineSummary(id: self.machineId, name: DeviceIdentity.displayName(),
-                                            todayTokens: tokens[self.machineId] ?? 0,
-                                            lastSeen: Int(now.timeIntervalSince1970), isLocal: true)]
-            for info in self.peerSource.peerInfos() {
-                summaries.append(MachineSummary(id: info.machineId, name: info.displayName,
-                                                todayTokens: tokens[info.machineId] ?? 0,
-                                                lastSeen: info.publishedAt, isLocal: false))
-            }
-            self.deliver { completion(summaries.sorted { $0.todayTokens > $1.todayTokens }) }
+            let summaries = self.machineSummaries(collapsed: Dedup.collapse(records), now: now)
+            self.deliver { completion(summaries) }
         }
     }
 
@@ -110,17 +158,40 @@ final class UsageStore {
         }
     }
 
-    /// Fetch this machine's local records ONCE per refresh and fan them to both the
-    /// peer publisher and the durable archive — each a no-op when its feature is off
-    /// or nothing changed. Sharing one fetch avoids scanning the logs twice per tick.
-    func persistLocal() {
+    /// Archive + peer publish don't need minute freshness: run a real persist pass at
+    /// most every `persistInterval`. The quit-time `flushLocal` stays immediate and
+    /// forced, so at most this window of increments rides on the crash-only risk —
+    /// and even then the source logs still hold them for the next ingest.
+    private static let persistInterval: TimeInterval = 300
+    /// Guarded by `persistGate`: persistLocal now runs from refreshTick's
+    /// background completion, so overlapping ticks must not race the gate.
+    private var lastPersistAt = Date.distantPast
+    private let persistGate = NSLock()
+
+    /// Fan this machine's local records to both the peer publisher and the durable
+    /// archive — each a no-op when its feature is off or nothing changed. Pass
+    /// `records` when the tick already fetched them (refreshTick); otherwise this
+    /// fetches once itself.
+    func persistLocal(now: Date = Date(), records: [UsageRecord]? = nil,
+                      completion: (() -> Void)? = nil) {
         let wantPublish = isSyncEnabled()
         let wantArchive = isArchiveEnabled()
-        guard wantPublish || wantArchive else { return }
-        CombinedProvider(localProviders).fetchRecords { [weak self] records in
-            guard let self else { return }
+        guard wantPublish || wantArchive else { completion?(); return }
+        persistGate.lock()
+        let isDue = now.timeIntervalSince(lastPersistAt) >= Self.persistInterval
+        if isDue { lastPersistAt = now }
+        persistGate.unlock()
+        guard isDue else { completion?(); return }
+        let persist: ([UsageRecord]) -> Void = { [weak self] records in
+            guard let self else { completion?(); return }
             if wantPublish { self.publisher.publishIfNeeded(localRecords: records) }
             if wantArchive { self.archive?.ingest(records) }
+            completion?()
+        }
+        if let records {
+            persist(records)
+        } else {
+            CombinedProvider(localProviders).fetchRecords(completion: persist)
         }
     }
 

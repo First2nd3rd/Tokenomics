@@ -31,7 +31,12 @@ enum UsageAggregator {
     /// Collapse runs once over the union; the per-source split happens afterward, so
     /// a duplicate that appears under two sources is still removed before splitting.
     static func byVendor(_ records: [UsageRecord], calendar: Calendar = .current) -> [String: [DailyUsage]] {
-        let collapsed = Dedup.collapse(records)
+        byVendor(collapsed: Dedup.collapse(records), calendar: calendar)
+    }
+
+    /// Same, for records the caller ALREADY collapsed — the per-tick refresh dedups
+    /// the union once and shares it across every same-tick view.
+    static func byVendor(collapsed: [UsageRecord], calendar: Calendar = .current) -> [String: [DailyUsage]] {
         var out: [String: [DailyUsage]] = [:]
         for (source, recs) in Dictionary(grouping: collapsed, by: { $0.source }) {
             out[vendorId(for: source)] = aggregateByDay(recs, calendar: calendar)
@@ -125,9 +130,15 @@ enum UsageAggregator {
     /// lags naturally: a not-yet-synced recent minute has combined == local ⇒ 0.
     static func splitDayMinuteMatrix(_ records: [UsageRecord])
         -> (combined: [String: [MinuteBucket]], local: [String: [MinuteBucket]]) {
+        splitDayMinuteMatrix(collapsed: Dedup.collapse(records))
+    }
+
+    /// Same, for records the caller ALREADY collapsed (see `byVendor(collapsed:)`).
+    static func splitDayMinuteMatrix(collapsed: [UsageRecord])
+        -> (combined: [String: [MinuteBucket]], local: [String: [MinuteBucket]]) {
         var combined: [String: [MinuteBucket]] = [:]
         var local: [String: [MinuteBucket]] = [:]
-        for r in Dedup.collapse(records) {
+        for r in collapsed {
             let (day, minute) = DayBucket.dayMinute(epoch: r.epoch)
             combined[day, default: Array(repeating: MinuteBucket(), count: 1440)][minute]
                 .add(input: r.input, output: r.output,

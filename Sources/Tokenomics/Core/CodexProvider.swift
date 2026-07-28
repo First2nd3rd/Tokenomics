@@ -25,11 +25,13 @@ import Foundation
 final class CodexProvider: UsageProvider {
     let id = "codex"
 
-    /// Per-file parse cache with NDJSON persistence; the version in the filename is
-    /// the format version. Deltas are computed per file, so each file's records are
-    /// self-contained and cacheable by (mtime, size).
-    private let cache = FileRecordCache<UsageRecord>(diskFileName: "codex-records-v7.ndjson",
-                                                     queueLabel: "tokenomics.codex-reader")
+    /// Per-file parse cache persisted one-file-per-source; the version in the
+    /// directory name is the format version. Deltas are computed per file, so each
+    /// file's records are self-contained and cacheable by (mtime, size).
+    private let cache = FileRecordCache<UsageRecord>(
+        cacheDirectoryName: "codex-records-v8",
+        queueLabel: "tokenomics.codex-reader",
+        legacyFiles: (3...7).map { "codex-records-v\($0).ndjson" })
 
     /// Raw, pre-dedup records; the union + single `Dedup.collapse` happens upstream.
     func fetchRecords(completion: @escaping ([UsageRecord]) -> Void) {
