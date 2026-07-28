@@ -160,14 +160,48 @@ struct PeriodReport: Codable, Equatable {
             .sorted { $0.tokens > $1.tokens }
     }
 
+    /// The period's days rolled up into calendar weeks — one `DailyUsage` per week,
+    /// keyed by the week's START day, summing counts + cost and unioning model
+    /// lists. Edge weeks that only partly overlap the period sum just the days the
+    /// period holds. Feeds the month view's weekly bars through the same chart the
+    /// daily series uses.
+    func weeklyRollup(calendar: Calendar = .current) -> [DailyUsage] {
+        var byWeek: [String: [DailyUsage]] = [:]
+        for day in days {
+            guard let date = Self.date(fromDayKey: day.date, calendar: calendar),
+                  let weekStart = calendar.dateInterval(of: .weekOfYear, for: date)?.start
+            else { continue }
+            byWeek[DayBucket.dayKey(weekStart, calendar: calendar), default: []].append(day)
+        }
+        return byWeek.map { start, group in
+            var input = 0, output = 0, cacheCreation = 0, cacheRead = 0, total = 0
+            var cost = 0.0
+            var models = Set<String>()
+            for d in group {
+                input += d.inputTokens; output += d.outputTokens
+                cacheCreation += d.cacheCreationTokens; cacheRead += d.cacheReadTokens
+                total += d.totalTokens; cost += d.totalCost
+                models.formUnion(d.models)
+            }
+            return DailyUsage(date: start, inputTokens: input, outputTokens: output,
+                              cacheCreationTokens: cacheCreation, cacheReadTokens: cacheRead,
+                              totalTokens: total, totalCost: cost, models: models.sorted())
+        }
+        .sorted { $0.date < $1.date }
+    }
+
+    /// Reconstruct a "yyyy-MM-dd" day key into a Date under `calendar`, so day and
+    /// week boundaries match how the keys were made.
+    private static func date(fromDayKey key: String, calendar: Calendar) -> Date? {
+        let parts = key.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+    }
+
     /// Longest run of consecutive calendar days among the given day keys ("yyyy-MM-dd").
     /// Keys are reconstructed via `calendar` so day boundaries match how they were made.
     static func longestStreak(_ dayKeys: [String], calendar: Calendar = .current) -> Int {
-        let dates = dayKeys.compactMap { key -> Date? in
-            let parts = key.split(separator: "-").compactMap { Int($0) }
-            guard parts.count == 3 else { return nil }
-            return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
-        }.sorted()
+        let dates = dayKeys.compactMap { Self.date(fromDayKey: $0, calendar: calendar) }.sorted()
         guard !dates.isEmpty else { return 0 }
         var longest = 1, current = 1
         for i in 1..<dates.count {

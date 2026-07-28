@@ -100,6 +100,26 @@ struct PeriodReportTests {
         #expect(r.projectedTokens == nil)           // not in progress
     }
 
+    @Test("weeklyRollup groups a month's days into week-start-keyed sums")
+    func weeklyRollup() {
+        // Monday-start weeks, pinned so the grouping is deterministic anywhere.
+        var mondayCal = cal
+        mondayCal.firstWeekday = 2
+
+        let records = [
+            rec(key: "a", tokens: 100, 2026, 6, 1),   // Mon — week of Jun 1
+            rec(key: "b", tokens: 200, 2026, 6, 7),   // Sun — same week
+            rec(key: "c", tokens: 400, 2026, 6, 8, 1),   // Mon — next week
+        ]
+        let r = PeriodReport.make(records: records, period: .month, anchor: date(2026, 6, 15),
+                                  now: date(2026, 7, 15), calendar: mondayCal)
+
+        let weeks = r.weeklyRollup(calendar: mondayCal)
+        #expect(weeks.map(\.date) == ["2026-06-01", "2026-06-08"])
+        #expect(weeks.map(\.totalTokens) == [300, 400])
+        #expect(weeks[0].inputTokens == 300)          // token types survive the sum
+    }
+
     @Test("an in-progress month projects from the trailing 7-day rate")
     func currentMonthProjection() {
         let records = [

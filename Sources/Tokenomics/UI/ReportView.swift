@@ -78,6 +78,18 @@ struct ReportView: View {
             }
             .padding(.vertical, 2)
         }
+        // A month of daily bars is hard to read at a glance; the weekly rollup
+        // (bars keyed by each week's start day) gives the coarse shape. Same
+        // chart, week-summed series.
+        if r.period == .month {
+            Section("Weekly") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ChartKit.dailyBars(r.weeklyRollup(), width: chartWidth)
+                    ChartKit.tokenLegend()
+                }
+                .padding(.vertical, 2)
+            }
+        }
         if !r.byVendor.isEmpty { Section("By Vendor") { vendorRows(r) } }
         if !r.byModel.isEmpty { Section("By Model") { modelRows(r) } }
         Section("Stats") { statsGrid(r) }
