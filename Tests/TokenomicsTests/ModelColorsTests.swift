@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SwiftUI
 @testable import Tokenomics
 
 @Suite("ModelColors")
@@ -48,6 +49,40 @@ struct ModelColorsTests {
         #expect(vendors == [true, true, false])
         // And within claude, price order still holds.
         #expect(entries[0].model == "claude-fable-5")
+    }
+
+    /// The color `assign` produces for a given hue + ladder rank.
+    private func ladderColor(hue: Double, rank: Int) -> Color {
+        Color(hue: hue, saturation: 0.72, brightness: max(0.46, 0.90 - 0.26 * Double(rank)))
+    }
+
+    @Test("two models take ADJACENT ladder steps, not the two extremes")
+    func adjacentSteps() {
+        let entries = ModelColors.assign(
+            ["claude-opus-4-8", "claude-fable-5"], price: Self.price)
+
+        // Fable (pricier) top rank; Opus one RANK (two base steps) darker.
+        #expect(entries[0].color == ladderColor(hue: 0.07, rank: 0))
+        #expect(entries[1].color == ladderColor(hue: 0.07, rank: 1))
+    }
+
+    @Test("a newly-arrived pricier model shifts the others down one step")
+    func rankShift() {
+        let alone = ModelColors.assign(["claude-opus-4-8"], price: Self.price)
+        #expect(alone[0].color == ladderColor(hue: 0.07, rank: 0))     // alone → top step
+
+        let joined = ModelColors.assign(
+            ["claude-opus-4-8", "claude-fable-5"], price: Self.price)
+        #expect(joined[0].model == "claude-fable-5")
+        #expect(joined[0].color == ladderColor(hue: 0.07, rank: 0))    // newcomer takes the top
+        #expect(joined[1].color == ladderColor(hue: 0.07, rank: 1))    // opus: one rank down
+    }
+
+    @Test("ranks past the ladder floor clamp instead of going negative")
+    func floorClamp() {
+        let many = (0..<8).map { "claude-model-\($0)" }
+        let entries = ModelColors.assign(many) { _ in 0 }
+        #expect(entries.last?.color == Color(hue: 0.07, saturation: 0.72, brightness: 0.46))
     }
 
     @Test("shortName strips the claude prefix and trailing date")
