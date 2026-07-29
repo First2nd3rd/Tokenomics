@@ -74,9 +74,11 @@ enum UsageAggregator {
     /// the day's totals, cost (at current prices), and per-vendor / per-model splits —
     /// the unit both the report and the snapshot writer consume. `frozen` tags whether
     /// the caller is persisting these as historical (true) or computing live (false).
+    /// `foldKeyless` defaults to the archive's idempotent semantics; pass false when
+    /// summarizing LIVE records so the result matches the dashboard's collapse exactly.
     static func daySummaries(_ records: [UsageRecord], pricedAt: Int, frozen: Bool,
-                             calendar: Calendar = .current) -> [DaySnapshot] {
-        let byDay = Dictionary(grouping: Dedup.collapse(records, foldKeyless: true)) {
+                             calendar: Calendar = .current, foldKeyless: Bool = true) -> [DaySnapshot] {
+        let byDay = Dictionary(grouping: Dedup.collapse(records, foldKeyless: foldKeyless)) {
             DayBucket.day(epoch: $0.epoch, calendar: calendar)
         }
         return byDay.map { day, recs in

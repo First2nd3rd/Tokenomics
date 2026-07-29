@@ -203,19 +203,52 @@ final class UsageStore {
     func report(period: ReportPeriod, anchor: Date, now: Date = Date(),
                 completion: @escaping (PeriodReport?) -> Void) {
         guard let archive else { deliver { completion(nil) }; return }
+        // TODAY's row is computed from the same live records the menu bar
+        // aggregates (same dedup, same prices) — never from the archive — so the
+        // two surfaces can't disagree and a reload writes nothing to disk. The
+        // archive's copy of today can only drift UP (collapse keeps the largest
+        // variant, so a superseded streamed line is never corrected down).
+        // Historical days still come from frozen snapshots + the archive.
+        if period.range(containing: anchor).contains(now) {
+            CombinedProvider(localProviders).fetchRecords { [weak self] records in
+                self?.buildReport(archive: archive, period: period, anchor: anchor,
+                                  now: now, liveRecords: records, completion: completion)
+            }
+        } else {
+            buildReport(archive: archive, period: period, anchor: anchor,
+                        now: now, liveRecords: nil, completion: completion)
+        }
+    }
+
+    /// Assemble the report from snapshots + archive (+ live records for today) on a
+    /// background queue.
+    private func buildReport(archive: UsageArchive, period: ReportPeriod, anchor: Date,
+                             now: Date, liveRecords: [UsageRecord]?,
+                             completion: @escaping (PeriodReport?) -> Void) {
         let snapshots = self.snapshots
         DispatchQueue.global(qos: .userInitiated).async { [deliver] in
             let todayKey = DayBucket.dayKey(now)
+            let pricedAt = Int(now.timeIntervalSince1970)
             // Frozen completed days from snapshots; never use a snapshot for today.
             let frozen = (snapshots?.snapshots() ?? []).filter { $0.date < todayKey }
             let have = Set(frozen.map(\.date))
-            // Live days for today + anything not yet snapshotted, from the raw archive.
+            // Un-snapshotted days from the raw archive — minus today when the live
+            // stream supersedes it below.
             let range = period.range(containing: anchor)
-            let live = UsageAggregator
+            let archived = UsageAggregator
                 .daySummaries(archive.records(forMonths: range.segmentsToRead()),
-                              pricedAt: Int(now.timeIntervalSince1970), frozen: false)
-                .filter { !have.contains($0.date) }
-            let report = PeriodReport.make(daySummaries: frozen + live, period: period, anchor: anchor, now: now)
+                              pricedAt: pricedAt, frozen: false)
+                .filter { !have.contains($0.date) && (liveRecords == nil || $0.date != todayKey) }
+            // Today, straight from the logs with the dashboard's exact collapse
+            // (keyless records all kept), so this figure matches the menu bar.
+            var today: [DaySnapshot] = []
+            if let liveRecords {
+                let todays = liveRecords.filter { DayBucket.day(epoch: $0.epoch) == todayKey }
+                today = UsageAggregator.daySummaries(todays, pricedAt: pricedAt,
+                                                     frozen: false, foldKeyless: false)
+            }
+            let report = PeriodReport.make(daySummaries: frozen + archived + today,
+                                           period: period, anchor: anchor, now: now)
             deliver { completion(report) }
         }
     }

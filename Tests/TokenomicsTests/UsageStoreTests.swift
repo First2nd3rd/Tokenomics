@@ -260,6 +260,61 @@ struct UsageStoreTests {
         #expect(archive.allRecords().contains { $0.key == "C" })
     }
 
+    @Test("a report covering today reads today from the live stream, not the archive")
+    func reportUsesLiveToday() async {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: TestFolder(), archive: archive,
+                               snapshots: nil,           // real SnapshotStore would leak this Mac's data in
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { true },
+                               deliver: immediate)
+
+        // The archive is EMPTY and no persist ran — today must come from the logs.
+        let report = await withCheckedContinuation { c in
+            store.report(period: .day, anchor: Date()) { c.resume(returning: $0) }
+        }
+        #expect(report?.total.total == 10)
+        #expect(af.files.isEmpty)          // and a reload never writes the archive
+    }
+
+    @Test("live today supersedes the archive's (possibly inflated) copy of today")
+    func liveTodayBeatsArchivedToday() async {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        // The archive holds a stale, LARGER variant of the same turn (streamed
+        // intermediate that a later log rewrite corrected down).
+        archive.ingest([record(.claude, key: "L", input: 999)])
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: TestFolder(), archive: archive,
+                               snapshots: nil,
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { true },
+                               deliver: immediate)
+
+        let report = await withCheckedContinuation { c in
+            store.report(period: .day, anchor: Date()) { c.resume(returning: $0) }
+        }
+        #expect(report?.total.total == 10)  // the menu bar's number, not 999
+    }
+
+    @Test("a report for a past period reads the archive as-is, no ingest")
+    func pastReportSkipsIngest() async {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: TestFolder(), archive: archive,
+                               snapshots: nil,           // real SnapshotStore would leak this Mac's data in
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { true },
+                               deliver: immediate)
+
+        let lastMonth = Calendar.current.date(byAdding: .month, value: -1, to: Date())!
+        let report = await withCheckedContinuation { c in
+            store.report(period: .month, anchor: lastMonth) { c.resume(returning: $0) }
+        }
+        #expect(report?.total.total == 0)
+        #expect(af.files.isEmpty)          // untouched — past periods never trigger a write
+    }
+
     @Test("the published file contains only this machine's records, not peers'")
     func publishesOwnRecordsOnly() throws {
         let folder = TestFolder()

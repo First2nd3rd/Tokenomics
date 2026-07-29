@@ -343,10 +343,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.center()
             settingsWindow = window
         }
-        // The statistics pane reloads in onAppear; that misses one case — the
-        // window is already open showing Statistics — so refresh it here then.
+        // The statistics pane reloads in onAppear, which only fires when the pane
+        // view is CREATED. Deep-linking to Statistics while already on it — the
+        // window open, or closed while showing it (closing never tears the view
+        // down) — recreates nothing, so refresh explicitly then.
         let alreadyOnStatistics = paneModel.pane == .statistics
-            && settingsWindow?.isVisible == true
         if let pane { paneModel.pane = pane }
         if pane == .statistics && alreadyOnStatistics {
             reportModel.syncOn = UserDefaults.standard.bool(forKey: "syncEnabled")
