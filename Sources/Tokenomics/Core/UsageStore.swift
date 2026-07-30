@@ -290,8 +290,28 @@ final class UsageStore {
                     hourly = UsageAggregator.hourlyCounts(collapsed: archiveRecords, day: range.key)
                 }
             }
+            // The week view's click-to-toggle density: PER-HOUR slots across every
+            // day of the week (the view regroups to the chosen width without a
+            // reload) — archive days plus the live today, the same source split
+            // the day rows use.
+            var fine: [PeriodReport.SlotBucket]?
+            if period == .week {
+                var dayKeys: [String] = []
+                var cursor = range.start
+                while cursor < range.end {
+                    dayKeys.append(DayBucket.dayKey(cursor))
+                    cursor = Calendar.current.date(byAdding: .day, value: 1, to: cursor) ?? range.end
+                }
+                var slotRecords = archiveRecords
+                if let liveRecords {
+                    slotRecords = slotRecords.filter { DayBucket.day(epoch: $0.epoch) != todayKey }
+                        + Dedup.collapse(liveRecords.filter { DayBucket.day(epoch: $0.epoch) == todayKey })
+                }
+                fine = UsageAggregator.slotCounts(collapsed: slotRecords, days: dayKeys, slotHours: 1)
+            }
             let report = PeriodReport.make(daySummaries: frozen + archived + today,
-                                           period: period, anchor: anchor, now: now, hourly: hourly)
+                                           period: period, anchor: anchor, now: now,
+                                           hourly: hourly, fine: fine)
             deliver { completion(report) }
         }
     }

@@ -116,6 +116,28 @@ enum UsageAggregator {
         return hours
     }
 
+    /// Fixed intraday slots across a run of days (tokens by type) from ALREADY-
+    /// collapsed records — the week chart's higher-density alternate. Every day in
+    /// `days` contributes all of its slots (empty ones included) so the series
+    /// spans the period continuously; records outside `days` are ignored. Slots
+    /// follow the calendar day, so DST oddities can't misplace a bucket.
+    static func slotCounts(collapsed: [UsageRecord], days: [String], slotHours: Int = 3,
+                           calendar: Calendar = .current) -> [PeriodReport.SlotBucket] {
+        let slotsPerDay = 24 / slotHours
+        var acc: [String: [TokenCounts]] = Dictionary(uniqueKeysWithValues: days.map {
+            ($0, Array(repeating: TokenCounts(), count: slotsPerDay))
+        })
+        for r in collapsed {
+            let (day, minute) = DayBucket.dayMinute(epoch: r.epoch, calendar: calendar)
+            guard acc[day] != nil else { continue }
+            acc[day]![(minute / 60) / slotHours].add(input: r.input, output: r.output,
+                                                     cacheCreation: r.cacheCreation, cacheRead: r.cacheRead)
+        }
+        return days.sorted().flatMap { day in
+            acc[day]!.enumerated().map { PeriodReport.SlotBucket(day: day, slot: $0.offset, counts: $0.element) }
+        }
+    }
+
     /// Total read-time cost of a record set (per-record pricing, summed). Unknown
     /// models (e.g. `<synthetic>`) price to $0.
     static func cost(_ records: [UsageRecord]) -> Double {

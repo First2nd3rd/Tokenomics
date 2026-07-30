@@ -355,16 +355,9 @@ struct DashboardView: View {
         .frame(width: 380)
     }
 
-    /// Click a dot to jump to that page (shared by both chart decks).
+    /// Click a dot to jump to that page (see ChartKit.pageDots).
     private func pageDots(current: Int, count: Int, select: @escaping (Int) -> Void) -> some View {
-        HStack(spacing: 5) {
-            ForEach(0..<count, id: \.self) { page in
-                Circle()
-                    .fill(page == current ? Color.primary.opacity(0.6) : Color.secondary.opacity(0.25))
-                    .frame(width: 6, height: 6)
-                    .onTapGesture { select(page) }
-            }
-        }
+        ChartKit.pageDots(current: current, count: count, select: select)
     }
 
     // MARK: - Daily bar chart (stacked by token type)

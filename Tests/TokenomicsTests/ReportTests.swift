@@ -100,6 +100,22 @@ struct PeriodReportTests {
         #expect(r.projectedTokens == nil)           // not in progress
     }
 
+    @Test("regroup merges hour slots into wider ones and keeps day boundaries")
+    func regroupSlots() {
+        func counts(_ n: Int) -> TokenCounts {
+            var c = TokenCounts(); c.add(input: n, output: 0, cacheCreation: 0, cacheRead: 0); return c
+        }
+        let hourly = (0..<24).map { PeriodReport.SlotBucket(day: "2026-07-20", slot: $0, counts: counts(1)) }
+            + (0..<24).map { PeriodReport.SlotBucket(day: "2026-07-21", slot: $0, counts: counts(2)) }
+
+        let three = PeriodReport.regroup(hourly, hours: 3)
+        #expect(three.count == 16)                              // 2 days × 8 slots
+        #expect(three.allSatisfy { $0.day == "2026-07-20" ? $0.counts.total == 3 : $0.counts.total == 6 })
+        #expect(three.prefix(8).map(\.slot) == Array(0..<8))    // ordered within the day
+
+        #expect(PeriodReport.regroup(hourly, hours: 1) == hourly)   // identity at 1h
+    }
+
     @Test("weeklyRollup groups a month's days into week-start-keyed sums")
     func weeklyRollup() {
         // Monday-start weeks, pinned so the grouping is deterministic anywhere.

@@ -93,11 +93,54 @@ enum ChartKit {
         .frame(width: width, height: height)
     }
 
+    /// Stacked fixed-slot bars across several days (the week chart's high-density
+    /// alternate), with an axis label at each day's first slot.
+    static func slotBars(_ buckets: [PeriodReport.SlotBucket], width: CGFloat,
+                         height: CGFloat = 130) -> some View {
+        Chart {
+            ForEach(buckets, id: \.axisKey) { bucket in
+                ForEach(tokenBands) { band in
+                    BarMark(x: .value("Slot", bucket.axisKey),
+                            y: .value("Tokens", band.value(bucket.counts)))
+                        .foregroundStyle(by: .value("Type", band.name))
+                }
+            }
+        }
+        .chartForegroundStyleScale(domain: tokenBands.map(\.name), range: tokenBands.map(\.color))
+        .chartLegend(.hidden)
+        .chartYScale(domain: 0...yUpper(buckets.map(\.counts.total).max() ?? 0))
+        .chartXAxis {
+            AxisMarks(values: buckets.filter { $0.slot == 0 }.map(\.axisKey)) { value in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let key = value.as(String.self), let day = key.split(separator: "#").first {
+                        Text(Format.shortMonthDay(String(day)))
+                    }
+                }
+            }
+        }
+        .chartYAxis { tokenAxis() }
+        .frame(width: width, height: height)
+    }
+
     /// ~6 evenly spaced day keys to label so a month of bars doesn't crowd the axis.
     private static func sparseLabels(_ days: [DailyUsage]) -> [String] {
         guard !days.isEmpty else { return [] }
         let step = max(1, days.count / 6)
         return stride(from: 0, to: days.count, by: step).map { days[$0].date }
+    }
+
+    /// Page dots (click a dot to jump), shared by the popover chart decks and the
+    /// report's chart toggles so paged charts read the same everywhere.
+    static func pageDots(current: Int, count: Int, select: @escaping (Int) -> Void) -> some View {
+        HStack(spacing: 5) {
+            ForEach(0..<count, id: \.self) { page in
+                Circle()
+                    .fill(page == current ? Color.primary.opacity(0.6) : Color.secondary.opacity(0.25))
+                    .frame(width: 6, height: 6)
+                    .onTapGesture { select(page) }
+            }
+        }
     }
 
     /// A horizontal proportion bar (share of a max) at `width`.

@@ -47,12 +47,42 @@ struct PeriodReport: Codable, Equatable {
     /// Hour-of-day buckets (24), day period only — the single-day intraday chart.
     let hourly: [TokenCounts]?
 
+    /// One fixed intraday slot of one day (3-hour slots today). `slot` indexes
+    /// within the day, so a bucket's place on the axis is (day, slot).
+    struct SlotBucket: Codable, Equatable {
+        let day: String         // ISO day key, "2026-07-28"
+        let slot: Int           // 0-based slot within the day
+        let counts: TokenCounts
+
+        /// Chart axis identity: day + slot, ordered lexically (slot count ≤ 9).
+        var axisKey: String { "\(day)#\(slot)" }
+    }
+
+    /// PER-HOUR slots spanning the whole period (week period only) — the chart's
+    /// click-to-toggle higher-density view. Carried at hour resolution so the view
+    /// can regroup to any density without a reload; empty slots included, so the
+    /// series is continuous across the week.
+    let fine: [SlotBucket]?
+
+    /// Merge per-hour slots into `hours`-wide slots (a divisor of 24). Pure — the
+    /// week chart's density stepper calls this on every change.
+    static func regroup(_ hourly: [SlotBucket], hours: Int) -> [SlotBucket] {
+        guard hours > 1 else { return hourly }
+        var merged: [String: [Int: TokenCounts]] = [:]
+        for bucket in hourly {
+            merged[bucket.day, default: [:]][bucket.slot / hours, default: TokenCounts()].add(bucket.counts)
+        }
+        return merged.keys.sorted().flatMap { day in
+            merged[day]!.keys.sorted().map { SlotBucket(day: day, slot: $0, counts: merged[day]![$0]!) }
+        }
+    }
+
     /// Build a report from per-day summaries spanning at least this period and the
     /// previous one — the unit that blends frozen snapshots with live-computed days.
     /// Everything derives under `calendar`'s timezone.
     static func make(daySummaries: [DaySnapshot], period: ReportPeriod, anchor: Date,
                      now: Date = Date(), calendar: Calendar = .current,
-                     hourly: [TokenCounts]? = nil) -> PeriodReport {
+                     hourly: [TokenCounts]? = nil, fine: [SlotBucket]? = nil) -> PeriodReport {
         let range = period.range(containing: anchor, calendar: calendar)
         let prior = period.previous(range, calendar: calendar)
         // ISO day keys order lexically, so range membership is a string compare.
@@ -127,7 +157,7 @@ struct PeriodReport: Codable, Equatable {
                             dailyAverage: dailyAverage, longestStreak: longestStreak,
                             previousTokens: previousTokens, previousCost: previousCost,
                             projectedTokens: projectedTokens, projectedCost: projectedCost,
-                            pricesFrozen: pricesFrozen, hourly: hourly)
+                            pricesFrozen: pricesFrozen, hourly: hourly, fine: fine)
     }
 
     /// Convenience: build from raw records (live cost, nothing frozen). Used by tests

@@ -363,6 +363,31 @@ struct UsageStoreTests {
         #expect(report?.hourly?[hour].total == 30)
     }
 
+    @Test("a week report carries a full week of 3-hour slots mixing archive and live")
+    func weekReportSlots() async {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+        archive.ingest([UsageRecord(source: .claude, key: "Y", epoch: Int(yesterday.timeIntervalSince1970),
+                                    input: 30, output: 0, cacheCreation: 0, cacheRead: 0, model: "m")])
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: TestFolder(), archive: archive,
+                               snapshots: nil,
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { true },
+                               deliver: immediate)
+
+        let report = await withCheckedContinuation { c in
+            store.report(period: .week, anchor: Date()) { c.resume(returning: $0) }
+        }
+        let fine = report?.fine
+        let daysInWeek = ReportPeriod.week.range(containing: Date()).dayCount()
+        #expect(fine?.count == daysInWeek * 24)     // carried at hour resolution
+        // Today's live record always lands in a slot; yesterday's archived record
+        // does too unless the week started today.
+        let expected = Calendar.current.isDate(yesterday, equalTo: Date(), toGranularity: .weekOfYear) ? 40 : 10
+        #expect(fine?.reduce(0) { $0 + $1.counts.total } == expected)
+    }
+
     @Test("a report for a past period reads the archive as-is, no ingest")
     func pastReportSkipsIngest() async {
         let af = MemoryArchiveFolder()

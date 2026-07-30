@@ -19,6 +19,25 @@ struct HourlyCountsTests {
                     input: input, output: 0, cacheCreation: 0, cacheRead: 0, model: "m")
     }
 
+    @Test("slotCounts spans every requested day with fixed slots, in order")
+    func slotBuckets() {
+        let records = [
+            rec(key: "a", input: 10, epoch: epoch(2)),     // slot 0 (00–03)
+            rec(key: "b", input: 20, epoch: epoch(3)),     // slot 1 (03–06)
+            rec(key: "c", input: 40, epoch: epoch(9) + 86_400),   // next day, slot 3
+            rec(key: "out", input: 999, epoch: epoch(9) - 86_400), // day before the range
+        ]
+        let buckets = UsageAggregator.slotCounts(
+            collapsed: records, days: ["2026-07-20", "2026-07-21"], calendar: cal)
+
+        #expect(buckets.count == 16)                        // 2 days × 8 slots, empties included
+        #expect(buckets[0].day == "2026-07-20" && buckets[0].slot == 0)
+        #expect(buckets[0].counts.total == 10)
+        #expect(buckets[1].counts.total == 20)
+        #expect(buckets[8 + 3].counts.total == 40)          // next day's slot 3
+        #expect(buckets.reduce(0) { $0 + $1.counts.total } == 70)   // out-of-range excluded
+    }
+
     @Test("buckets records into their local hour and ignores other days")
     func hourBuckets() {
         let records = [

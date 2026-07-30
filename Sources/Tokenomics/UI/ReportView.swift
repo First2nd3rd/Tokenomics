@@ -7,6 +7,12 @@ import AppKit
 struct ReportView: View {
     @ObservedObject var model: ReportModel
     @State private var copied = false
+    /// Week chart page: daily bars by default, fixed-hour slots on page 2
+    /// (chart click or the page dots switch, like the popover decks).
+    @State private var weekFine = false
+    /// Slot width for the fine page, stepped through `Self.slotChoices`.
+    @AppStorage("weekSlotHours") private var weekSlotHours = 3
+    private static let slotChoices = [1, 2, 3, 4, 6, 8, 12]
 
     /// Charts draw at explicit widths (see ChartKit); sized to the settings
     /// window's detail column.
@@ -38,6 +44,19 @@ struct ReportView: View {
             model.reload()
         }
         .onChange(of: model.report?.key) { _, _ in copied = false }
+    }
+
+    /// The stored slot width, snapped to the nearest allowed choice.
+    private var slotHours: Int {
+        Self.slotChoices.min { abs($0 - weekSlotHours) < abs($1 - weekSlotHours) } ?? 3
+    }
+
+    /// The stepper walks the allowed slot widths (1, 2, 3, 4, 6, 8, 12h) by index.
+    private var slotChoiceIndex: Binding<Int> {
+        Binding(
+            get: { Self.slotChoices.firstIndex(of: slotHours) ?? 2 },
+            set: { weekSlotHours = Self.slotChoices[$0] }
+        )
     }
 
     // MARK: - Header (granularity picker + period navigator)
@@ -72,7 +91,8 @@ struct ReportView: View {
             headline(r)
         }
         // A single day gets its intraday shape (hour-of-day bars); one lone daily
-        // bar says nothing. Multi-day periods keep the daily series.
+        // bar says nothing. The week can toggle density with a click (the popover
+        // charts use the same tap-to-cycle gesture); the month keeps daily bars.
         if r.period == .day, let hourly = r.hourly {
             Section("By Hour") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -80,6 +100,34 @@ struct ReportView: View {
                     ChartKit.tokenLegend()
                 }
                 .padding(.vertical, 2)
+            }
+        } else if r.period == .week, let fine = r.fine {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    if weekFine {
+                        ChartKit.slotBars(PeriodReport.regroup(fine, hours: slotHours),
+                                          width: chartWidth)
+                    } else {
+                        ChartKit.dailyBars(r.days, width: chartWidth)
+                    }
+                    HStack {
+                        ChartKit.tokenLegend()
+                        Spacer()
+                        ChartKit.pageDots(current: weekFine ? 1 : 0, count: 2) { weekFine = $0 == 1 }
+                    }
+                }
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+                .onTapGesture { weekFine.toggle() }
+            } header: {
+                HStack(spacing: 8) {
+                    Text(weekFine ? (slotHours == 1 ? "Hourly" : "Every \(slotHours) Hours") : "Daily")
+                    if weekFine {
+                        Stepper("", value: slotChoiceIndex, in: 0...(Self.slotChoices.count - 1))
+                            .labelsHidden()
+                            .controlSize(.mini)
+                    }
+                }
             }
         } else {
             Section("Daily") {
