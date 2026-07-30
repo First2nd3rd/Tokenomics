@@ -59,9 +59,10 @@ enum UsageAggregator {
     /// Per-model totals (tokens by type + cost), deduped across the union, sorted by
     /// tokens descending. The `<synthetic>` placeholder model is excluded, matching
     /// the daily aggregator. Cost is per-record at read-time prices, then summed.
-    static func byModel(_ records: [UsageRecord]) -> [ModelUsage] {
+    /// `assumeCollapsed` skips the dedup when the caller already ran it.
+    static func byModel(_ records: [UsageRecord], assumeCollapsed: Bool = false) -> [ModelUsage] {
         var acc: [String: ModelAccumulator] = [:]
-        for r in Dedup.collapse(records) {
+        for r in (assumeCollapsed ? records : Dedup.collapse(records)) {
             guard let model = r.model, model != "<synthetic>" else { continue }
             acc[model, default: ModelAccumulator()].add(r)
         }
@@ -76,11 +77,19 @@ enum UsageAggregator {
     /// the caller is persisting these as historical (true) or computing live (false).
     /// `foldKeyless` defaults to the archive's idempotent semantics; pass false when
     /// summarizing LIVE records so the result matches the dashboard's collapse exactly.
+    /// `assumeCollapsed` skips every internal dedup (outer and per-day byModel) when
+    /// the caller already collapsed the records — a Statistics reload otherwise
+    /// re-collapses the same set three times over. `excludingDays` drops whole days
+    /// AFTER grouping but BEFORE the (expensive) per-day aggregation — the report
+    /// discards every snapshot-frozen day, so aggregating them first is pure waste.
     static func daySummaries(_ records: [UsageRecord], pricedAt: Int, frozen: Bool,
-                             calendar: Calendar = .current, foldKeyless: Bool = true) -> [DaySnapshot] {
-        let byDay = Dictionary(grouping: Dedup.collapse(records, foldKeyless: foldKeyless)) {
+                             calendar: Calendar = .current, foldKeyless: Bool = true,
+                             assumeCollapsed: Bool = false,
+                             excludingDays: Set<String> = []) -> [DaySnapshot] {
+        let collapsed = assumeCollapsed ? records : Dedup.collapse(records, foldKeyless: foldKeyless)
+        let byDay = Dictionary(grouping: collapsed) {
             DayBucket.day(epoch: $0.epoch, calendar: calendar)
-        }
+        }.filter { !excludingDays.contains($0.key) }
         return byDay.map { day, recs in
             var total = TokenCounts()
             for r in recs {
@@ -96,7 +105,8 @@ enum UsageAggregator {
                 return VendorUsage(vendor: vendor.displayName, counts: counts, cost: cost(vrecs))
             }
             return DaySnapshot(date: day, total: total, cost: cost(recs), pricedAt: pricedAt,
-                               frozen: frozen, byVendor: byVendor, byModel: byModel(recs))
+                               frozen: frozen, byVendor: byVendor,
+                               byModel: byModel(recs, assumeCollapsed: true))
         }
         .sorted { $0.date < $1.date }
     }

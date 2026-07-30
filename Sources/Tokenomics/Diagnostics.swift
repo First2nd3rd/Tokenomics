@@ -34,6 +34,52 @@ enum BenchReport {
     }
 }
 
+/// Builds every Statistics period against REAL data and checks the invariants the
+/// sub-pages rely on: per-day rows sum to the period total, and each period's
+/// alternate chart (hourly / week slots / weekly rollup) preserves that total.
+/// Prints per-day rows for external diffing; exits non-zero on any violation.
+/// Invoked with `--verify-report`.
+enum VerifyReport {
+    static func run() {
+        let store = UsageStore(deliver: { work in work() })
+        var failures = 0
+        func check(_ name: String, _ ok: Bool) {
+            print("\(ok ? "ok " : "FAIL") \(name)")
+            if !ok { failures += 1 }
+        }
+
+        for period in [ReportPeriod.day, .week, .month] {
+            guard let r: PeriodReport = waitFor({ done in
+                store.report(period: period, anchor: Date(), completion: done)
+            }) else {
+                check("\(period.label): report built", false)
+                continue
+            }
+            let daySum = r.days.reduce(0) { $0 + $1.totalTokens }
+            check("\(period.label): day rows sum to total (\(r.total.total))", daySum == r.total.total)
+            let vendorSum = r.byVendor.reduce(0) { $0 + $1.tokens }
+            check("\(period.label): vendor split sums to total", vendorSum == r.total.total)
+
+            switch period {
+            case .day:
+                let hourSum = (r.hourly ?? []).reduce(0) { $0 + $1.total }
+                check("Day: hour buckets sum to total", hourSum == r.total.total)
+            case .week:
+                let fine = r.fine ?? []
+                let slotSum = fine.reduce(0) { $0 + $1.counts.total }
+                check("Week: hour slots sum to total", slotSum == r.total.total)
+                let regrouped = PeriodReport.regroup(fine, hours: 3).reduce(0) { $0 + $1.counts.total }
+                check("Week: 3h regroup preserves total", regrouped == r.total.total)
+            case .month:
+                let weekly = r.weeklyRollup().reduce(0) { $0 + $1.totalTokens }
+                check("Month: weekly rollup sums to total", weekly == r.total.total)
+            }
+            for day in r.days { print("\(period.label) \(day.date) \(day.totalTokens)") }
+        }
+        exit(failures == 0 ? 0 : 1)
+    }
+}
+
 /// Times two consecutive reads on one provider instance: the first does the full
 /// scan, the second should hit the mtime cache. Invoked with `--bench`.
 enum Bench {

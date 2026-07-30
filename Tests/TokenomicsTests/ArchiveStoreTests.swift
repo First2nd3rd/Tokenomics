@@ -58,6 +58,23 @@ struct ArchiveStoreTests {
         #expect(archive.records(forMonths: [month]).count == 2)     // and repeat reads hold
     }
 
+    @Test("a second instance's write over the same in-memory folder is visible to the first")
+    func crossInstanceReadsStayFresh() {
+        // In-memory folders can't be stat-ed, so the collapsed cache must stand
+        // down entirely — otherwise instance A would keep serving its first read.
+        let folder = MemoryArchiveFolder()
+        let a = UsageArchive(folder: folder)
+        let b = UsageArchive(folder: folder)
+        let now = Int(Date().timeIntervalSince1970)
+        let month = DayBucket.month(epoch: now)
+
+        a.ingest([rec(.claude, key: "A", epoch: now)])
+        #expect(a.records(forMonths: [month]).count == 1)   // primes any cache
+
+        b.ingest([rec(.claude, key: "A", epoch: now), rec(.claude, key: "B", epoch: now)])
+        #expect(a.records(forMonths: [month]).count == 2)   // must see b's write
+    }
+
     @Test("reads records across months, collapsed once")
     func readsAcrossMonths() throws {
         let folder = LocalArchiveFolder(tempDir())

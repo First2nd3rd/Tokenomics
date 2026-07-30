@@ -25,6 +25,9 @@ final class UsageArchive {
     /// stamp. Files that can't be stat-ed (in-memory test folders) skip caching.
     private struct CachedSegment { let mtime: Int; let size: Int; let records: [UsageRecord] }
     private var segmentCache: [String: CachedSegment] = [:]
+    /// Last collapsed cross-month read (see `records(forMonths:)`).
+    private struct CollapsedMonths { let key: String; let stamps: [String]; let records: [UsageRecord] }
+    private var collapsedCache: CollapsedMonths?
     private let segmentCacheLock = NSLock()
 
     init(folder: ArchiveFolder,
@@ -49,8 +52,47 @@ final class UsageArchive {
     /// Collapsed records across the given months. Reading the segments and collapsing
     /// ONCE (keyless folded too) yields each unique event exactly once, regardless of
     /// any superseded streamed-output lines a rewrite may have left behind.
+    ///
+    /// The collapse itself is the expensive part on repeat reads (every Statistics
+    /// reload asks for the same months), so the last result is kept, keyed by the
+    /// months plus each segment file's stamp.
     func records(forMonths months: [String]) -> [UsageRecord] {
-        Dedup.collapse(months.flatMap(rawSegment), foldKeyless: true)
+        let stamps = months.compactMap(segmentStamp)
+        // Any un-stat-able month (an in-memory test folder) ⇒ no caching at all,
+        // mirroring rawSegment's policy — a second instance over the same folder
+        // must never be served this instance's stale collapse.
+        guard stamps.count == months.count else {
+            return Dedup.collapse(months.flatMap(rawSegment), foldKeyless: true)
+        }
+        let key = months.joined(separator: ",")
+        segmentCacheLock.lock()
+        if let hit = collapsedCache, hit.key == key, hit.stamps == stamps {
+            let records = hit.records
+            segmentCacheLock.unlock()
+            return records
+        }
+        segmentCacheLock.unlock()
+
+        let collapsed = Dedup.collapse(months.flatMap(rawSegment), foldKeyless: true)
+        segmentCacheLock.lock()
+        collapsedCache = CollapsedMonths(key: key, stamps: stamps, records: collapsed)
+        segmentCacheLock.unlock()
+        return collapsed
+    }
+
+    /// (mtime, size) of a month's segment file; "absent" for a missing file under
+    /// a stat-able directory (a month with no data yet — stable, and an appearing
+    /// file changes the stamp); nil when the directory itself can't be stat-ed,
+    /// which disables the collapsed cache for that read.
+    private func segmentStamp(_ month: String) -> String? {
+        guard let dir = folder.directoryURL,
+              FileManager.default.fileExists(atPath: dir.path) else { return nil }
+        guard let attrs = try? FileManager.default.attributesOfItem(
+            atPath: dir.appendingPathComponent(archiveSegmentName(forMonth: month)).path)
+        else { return "absent" }
+        let mtime = Int((attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)
+        let size = (attrs[.size] as? Int) ?? -1
+        return "\(mtime)-\(size)"
     }
 
     /// Convenience: every record in the archive, collapsed. O(all history) — for
@@ -173,6 +215,7 @@ final class UsageArchive {
         // invalidating here keeps our own writes always visible.
         segmentCacheLock.lock()
         segmentCache.removeValue(forKey: month)
+        collapsedCache = nil
         segmentCacheLock.unlock()
     }
 

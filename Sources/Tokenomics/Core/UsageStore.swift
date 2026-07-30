@@ -264,30 +264,42 @@ final class UsageStore {
             // Frozen completed days from snapshots; never use a snapshot for today.
             let frozen = (snapshots?.snapshots() ?? []).filter { $0.date < todayKey }
             let have = Set(frozen.map(\.date))
-            // Un-snapshotted days from the raw archive — minus today when the live
-            // stream supersedes it below.
             let range = period.range(containing: anchor)
+            // Today's records, collapsed ONCE with the dashboard's exact semantics
+            // (keyless records all kept) — the summary row, the hour buckets, and
+            // the week slots below all share this instead of re-collapsing.
+            let todayCollapsed = liveRecords.map { live in
+                Dedup.collapse(live.filter { DayBucket.day(epoch: $0.epoch) == todayKey })
+            }
+            // Un-snapshotted days from the raw archive (already collapsed by the
+            // archive read). Nearly every past day is frozen, so those days are
+            // dropped before the per-day aggregation; today is dropped too when
+            // the live stream supersedes it.
             let archiveRecords = archive.records(forMonths: range.segmentsToRead())
+            var excludedDays = have
+            if todayCollapsed != nil { excludedDays.insert(todayKey) }
             let archived = UsageAggregator
-                .daySummaries(archiveRecords, pricedAt: pricedAt, frozen: false)
-                .filter { !have.contains($0.date) && (liveRecords == nil || $0.date != todayKey) }
-            // Today, straight from the logs with the dashboard's exact collapse
-            // (keyless records all kept), so this figure matches the menu bar.
+                .daySummaries(archiveRecords, pricedAt: pricedAt, frozen: false,
+                              assumeCollapsed: true, excludingDays: excludedDays)
+            // Today, straight from the logs, so this figure matches the menu bar.
             var today: [DaySnapshot] = []
-            if let liveRecords {
-                let todays = liveRecords.filter { DayBucket.day(epoch: $0.epoch) == todayKey }
-                today = UsageAggregator.daySummaries(todays, pricedAt: pricedAt,
-                                                     frozen: false, foldKeyless: false)
+            if let todayCollapsed {
+                today = UsageAggregator.daySummaries(todayCollapsed, pricedAt: pricedAt,
+                                                     frozen: false, assumeCollapsed: true)
             }
             // The day view swaps the (single-bar) daily chart for an hour-of-day
             // one: today buckets the live stream, a past day its archive records.
+            // Coarse epoch bounds prune the 3-month archive union with Int compares
+            // before any per-record calendar math.
+            let startEpoch = Int(range.start.timeIntervalSince1970)
+            let endEpoch = Int(range.end.timeIntervalSince1970)
             var hourly: [TokenCounts]?
             if period == .day {
-                if let liveRecords, range.key == todayKey {
-                    hourly = UsageAggregator.hourlyCounts(collapsed: Dedup.collapse(liveRecords),
-                                                          day: range.key)
+                if let todayCollapsed, range.key == todayKey {
+                    hourly = UsageAggregator.hourlyCounts(collapsed: todayCollapsed, day: range.key)
                 } else {
-                    hourly = UsageAggregator.hourlyCounts(collapsed: archiveRecords, day: range.key)
+                    let dayRecords = archiveRecords.filter { $0.epoch >= startEpoch && $0.epoch < endEpoch }
+                    hourly = UsageAggregator.hourlyCounts(collapsed: dayRecords, day: range.key)
                 }
             }
             // The week view's click-to-toggle density: PER-HOUR slots across every
@@ -302,11 +314,12 @@ final class UsageStore {
                     dayKeys.append(DayBucket.dayKey(cursor))
                     cursor = Calendar.current.date(byAdding: .day, value: 1, to: cursor) ?? range.end
                 }
-                var slotRecords = archiveRecords
-                if let liveRecords {
-                    slotRecords = slotRecords.filter { DayBucket.day(epoch: $0.epoch) != todayKey }
-                        + Dedup.collapse(liveRecords.filter { DayBucket.day(epoch: $0.epoch) == todayKey })
+                let todayStartEpoch = Int(Calendar.current.startOfDay(for: now).timeIntervalSince1970)
+                var slotRecords = archiveRecords.filter { r in
+                    r.epoch >= startEpoch && r.epoch < endEpoch
+                        && (todayCollapsed == nil || r.epoch < todayStartEpoch)
                 }
+                if let todayCollapsed { slotRecords += todayCollapsed }
                 fine = UsageAggregator.slotCounts(collapsed: slotRecords, days: dayKeys, slotHours: 1)
             }
             let report = PeriodReport.make(daySummaries: frozen + archived + today,

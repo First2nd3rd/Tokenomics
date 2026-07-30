@@ -43,7 +43,8 @@ final class SnapshotStore {
             // stuck below the dashboard.
             let records = archive.records(forMonths: archive.availableMonths())
             let summaries = UsageAggregator
-                .daySummaries(records, pricedAt: Int(now.timeIntervalSince1970), frozen: true, calendar: calendar)
+                .daySummaries(records, pricedAt: Int(now.timeIntervalSince1970), frozen: true,
+                              calendar: calendar, assumeCollapsed: true)   // archive read collapses
                 .filter { $0.date < todayKey }
 
             sweptForDay = todayKey
