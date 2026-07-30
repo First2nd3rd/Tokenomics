@@ -160,6 +160,129 @@ struct SnapshotStoreTests {
         #expect(fresh.snapshots().first?.total.total == 900)   // updated, not stuck at 100
     }
 
+    @Test("a recent day's FIRST freeze prefers live records over an inflated archive")
+    func liveFreezeWinsFirstFreeze() {
+        let folder = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: folder, machineId: "m", displayName: { "m" }, appVersion: "0")
+        let yesterday = Int(clock.timeIntervalSince1970) - 86_400
+        // The archive caught a streamed transient at 900; the logs settled at 100.
+        archive.ingest([UsageRecord(source: .claude, key: "T", epoch: yesterday, input: 0, output: 900,
+                                    cacheCreation: 0, cacheRead: 0, model: "m")], now: clock)
+        let live = [UsageRecord(source: .claude, key: "T", epoch: yesterday, input: 0, output: 100,
+                                cacheCreation: 0, cacheRead: 0, model: "m")]
+
+        let store = SnapshotStore(fileURL: tempFile(), machineId: "m")
+        store.refresh(now: clock, archive: archive, liveRecords: live, calendar: cal)
+        #expect(store.snapshots().first?.total.total == 100)   // the logs' value, not 900
+    }
+
+    @Test("days outside the live-freeze window keep freezing from the archive")
+    func oldDaysFreezeFromArchive() {
+        let folder = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: folder, machineId: "m", displayName: { "m" }, appVersion: "0")
+        let oldEpoch = Int(clock.timeIntervalSince1970) - 10 * 86_400
+        archive.backfill([UsageRecord(source: .claude, key: "O", epoch: oldEpoch, input: 700, output: 0,
+                                      cacheCreation: 0, cacheRead: 0, model: "m")])
+        // Live logs still hold a DIFFERENT value for that old day — it must be
+        // ignored: outside the window the archive is the durable authority.
+        let live = [UsageRecord(source: .claude, key: "O", epoch: oldEpoch, input: 1, output: 0,
+                                cacheCreation: 0, cacheRead: 0, model: "m")]
+
+        let store = SnapshotStore(fileURL: tempFile(), machineId: "m")
+        store.refresh(now: clock, archive: archive, liveRecords: live, calendar: cal)
+        #expect(store.snapshots().first?.total.total == 700)
+    }
+
+    @Test("live freeze still respects grow-only for an already-frozen day")
+    func liveFreezeRespectsGrowOnly() throws {
+        let folder = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: folder, machineId: "m", displayName: { "m" }, appVersion: "0")
+        let yesterday = Int(clock.timeIntervalSince1970) - 86_400
+        archive.ingest([rec(daysAgo: 1)], now: clock)
+        let file = tempFile()
+        let day = DayBucket.day(epoch: yesterday, calendar: cal)
+        let frozen = DaySnapshot(date: day, total: TokenCounts(input: 5_000, output: 0, cacheCreation: 0, cacheRead: 0),
+                                 cost: 9.9, pricedAt: 1, frozen: true, byVendor: [], byModel: [])
+        try SnapshotFile.encode([frozen], machineId: "m", updatedAt: 1).write(to: file)
+
+        let live = [rec(daysAgo: 1)]   // 100 tokens — less than the frozen 5000
+        let store = SnapshotStore(fileURL: file, machineId: "m")
+        store.refresh(now: clock, archive: archive, liveRecords: live, calendar: cal)
+        #expect(store.snapshots().first?.total.total == 5_000)   // untouched
+    }
+
+    @Test("overwrite replaces a frozen day unconditionally (the refreeze path)")
+    func overwriteShrinks() throws {
+        let file = tempFile()
+        let big = DaySnapshot(date: "2026-07-01", total: TokenCounts(input: 999, output: 0, cacheCreation: 0, cacheRead: 0),
+                              cost: 9.9, pricedAt: 1, frozen: true, byVendor: [], byModel: [])
+        try SnapshotFile.encode([big], machineId: "m", updatedAt: 1).write(to: file)
+
+        let store = SnapshotStore(fileURL: file, machineId: "m")
+        let corrected = DaySnapshot(date: "2026-07-01", total: TokenCounts(input: 10, output: 0, cacheCreation: 0, cacheRead: 0),
+                                    cost: 0.1, pricedAt: 2, frozen: true, byVendor: [], byModel: [])
+        store.overwrite(corrected)
+        #expect(store.snapshots().first?.total.total == 10)      // shrank — deliberately
+    }
+
+    @Test("overwrite refuses when the store file exists but reads back empty")
+    func overwriteRefusesFailedRead() throws {
+        let file = tempFile()
+        try Data("not a snapshot file".utf8).write(to: file)   // garbled: decodes to nothing
+
+        let store = SnapshotStore(fileURL: file, machineId: "m")
+        let day = DaySnapshot(date: "2026-07-01", total: TokenCounts(input: 10, output: 0, cacheCreation: 0, cacheRead: 0),
+                              cost: 0.1, pricedAt: 2, frozen: true, byVendor: [], byModel: [])
+        #expect(store.overwrite(day) == false)
+        // The garbled file was NOT replaced by a one-day store.
+        #expect(String(data: try Data(contentsOf: file), encoding: .utf8) == "not a snapshot file")
+    }
+
+    @Test("a midnight-straddling turn's superseded partial is not frozen into yesterday")
+    func straddlePartialNotDoubleCounted() {
+        let folder = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: folder, machineId: "m", displayName: { "m" }, appVersion: "0")
+        let yesterday = Int(clock.timeIntervalSince1970) - 86_400
+        archive.ingest([rec(daysAgo: 1)], now: clock)   // unrelated 100-token day base
+
+        // Turn T streamed across midnight: partial logged late yesterday (500),
+        // final logged today (900). The dashboard counts ONLY the final, today.
+        let partial = UsageRecord(source: .claude, key: "T", epoch: yesterday + 86_000, input: 0, output: 500,
+                                  cacheCreation: 0, cacheRead: 0, model: "m")
+        let final = UsageRecord(source: .claude, key: "T", epoch: Int(clock.timeIntervalSince1970) - 100,
+                                input: 0, output: 900, cacheCreation: 0, cacheRead: 0, model: "m")
+        let live = [rec(daysAgo: 1), partial, final]
+
+        let store = SnapshotStore(fileURL: tempFile(), machineId: "m")
+        store.refresh(now: clock, archive: archive, liveRecords: live, calendar: cal)
+        // Yesterday freezes at 100 — the superseded 500 partial must NOT appear.
+        #expect(store.snapshots().first?.total.total == 100)
+    }
+
+    @Test("live freeze settles the archive too, so leaving the window can't re-inflate")
+    func liveFreezeSettlesArchive() {
+        let folder = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: folder, machineId: "m", displayName: { "m" }, appVersion: "0")
+        let yesterday = Int(clock.timeIntervalSince1970) - 86_400
+        archive.ingest([UsageRecord(source: .claude, key: "T", epoch: yesterday, input: 0, output: 900,
+                                    cacheCreation: 0, cacheRead: 0, model: "m")], now: clock)
+        let live = [UsageRecord(source: .claude, key: "T", epoch: yesterday, input: 0, output: 100,
+                                cacheCreation: 0, cacheRead: 0, model: "m")]
+        let file = tempFile()
+        SnapshotStore(fileURL: file, machineId: "m").refresh(now: clock, archive: archive,
+                                                             liveRecords: live, calendar: cal)
+
+        // The archive's inflated copy was settled to the logs' value…
+        let month = DayBucket.month(epoch: yesterday, calendar: cal)
+        #expect(archive.records(forMonths: [month]).first { $0.key == "T" }?.output == 100)
+
+        // …so a sweep AFTER the day left the live window (archive-only) keeps 100.
+        let later = Date(timeIntervalSince1970: clock.timeIntervalSince1970 + 5 * 86_400)
+        let fresh = SnapshotStore(fileURL: file, machineId: "m")
+        fresh.refresh(now: later, archive: archive, calendar: cal)
+        #expect(fresh.snapshots().first?.total.total == 100)   // not re-inflated to 900
+    }
+
     @Test("never shrinks a frozen day when a recompute says less")
     func neverShrinks() throws {
         let folder = MemoryArchiveFolder()

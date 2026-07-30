@@ -106,6 +106,9 @@ final class UsageStore {
                 matrixLocal: DayBucket.recentDays(l, now: now, count: lastDays),
                 machines: syncOn ? self.machineSummaries(collapsed: collapsed, now: now) : [])
             self.persistLocal(now: now, records: local)
+            // The snapshot sweep rides the tick's fetch too, so freshly-finalized
+            // days freeze from the same live records every other surface uses.
+            self.refreshSnapshots(now: now, liveRecords: local)
             self.deliver { completion(tick) }
         }
     }
@@ -330,11 +333,12 @@ final class UsageStore {
     }
 
     /// Freeze finalized days into the snapshot store (cheap, off-thread; one real
-    /// sweep per calendar day). No-op when archiving is off or unavailable.
-    func refreshSnapshots(now: Date = Date()) {
+    /// sweep per calendar day). No-op when archiving is off or unavailable. Pass
+    /// `liveRecords` (the tick's fetch) so recent days freeze from the logs.
+    func refreshSnapshots(now: Date = Date(), liveRecords: [UsageRecord]? = nil) {
         guard isArchiveEnabled(), let archive, let snapshots else { return }
         DispatchQueue.global(qos: .utility).async {
-            snapshots.refresh(now: now, archive: archive)
+            snapshots.refresh(now: now, archive: archive, liveRecords: liveRecords)
         }
     }
 

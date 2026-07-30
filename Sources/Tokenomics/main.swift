@@ -41,6 +41,13 @@ if CommandLine.arguments.contains("--bench-report") {
 if CommandLine.arguments.contains("--verify-report") {
     VerifyReport.run()   // exits itself with the check status
 }
+if let flagIndex = CommandLine.arguments.firstIndex(of: "--refreeze") {
+    let days = CommandLine.arguments.dropFirst(flagIndex + 1).filter {
+        $0.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", options: .regularExpression) != nil
+    }
+    let force = CommandLine.arguments.contains("--force")
+    Refreeze.run(days: Array(days), force: force)   // exits itself with the repair status
+}
 
 // Menu bar agent: no Dock icon, no main window (.accessory activation policy).
 let app = NSApplication.shared

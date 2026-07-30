@@ -135,18 +135,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let now = Date()
 
         // ONE records fetch + dedup per tick feeds every surface (headline, charts,
-        // by-machine view) and the throttled archive/publish pass — so the number
-        // and the chart can't disagree, and the union isn't re-collapsed per view.
+        // by-machine view), the throttled archive/publish pass, and the snapshot
+        // sweep — so the number and the chart can't disagree, and the union isn't
+        // re-collapsed per view.
         store.refreshTick(now: now, lastDays: Self.matrixDays) { [weak self] tick in
             guard let self else { return }
             self.present(perVendor: tick.byVendor, matrix: tick.matrixCombined,
                          localMatrix: tick.matrixLocal, now: now)
             self.model.machines = tick.machines
         }
-
-        // Freeze any newly-finalized day into the snapshot store (guarded to one real
-        // sweep per day; catches the midnight rollover during a long-running session).
-        store.refreshSnapshots(now: now)
     }
 
     /// Flush a final publish + archive on quit so the last bit of usage is preserved

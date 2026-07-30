@@ -75,6 +75,25 @@ struct ArchiveStoreTests {
         #expect(a.records(forMonths: [month]).count == 2)   // must see b's write
     }
 
+    @Test("replaceDay swaps exactly one day's records, keeping the rest of the month")
+    func replaceDaySurgery() {
+        let folder = LocalArchiveFolder(tempDir())
+        let archive = UsageArchive(folder: folder)
+        let now = Int(Date().timeIntervalSince1970)
+        let month = DayBucket.month(epoch: now)
+        let yesterday = now - 86_400
+        guard DayBucket.month(epoch: yesterday) == month else { return }   // skip on the 1st
+
+        archive.ingest([rec(.claude, key: "A", output: 900, epoch: yesterday),   // inflated
+                        rec(.claude, key: "B", output: 5, epoch: now)])
+        archive.replaceDay(DayBucket.day(epoch: yesterday),
+                           with: [rec(.claude, key: "A", output: 100, epoch: yesterday)])
+
+        let records = archive.records(forMonths: [month])
+        #expect(records.first { $0.key == "A" }?.output == 100)   // shrank — merge-max bypassed
+        #expect(records.first { $0.key == "B" }?.output == 5)     // other day untouched
+    }
+
     @Test("reads records across months, collapsed once")
     func readsAcrossMonths() throws {
         let folder = LocalArchiveFolder(tempDir())

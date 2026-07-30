@@ -34,6 +34,92 @@ enum BenchReport {
     }
 }
 
+/// One-off repair (`--refreeze <day> [<day>…]`): recompute the named finalized
+/// days from the LIVE logs with the dashboard's exact collapse, then overwrite
+/// both the archive segment and the frozen snapshot — the explicit escape hatch
+/// from the grow-only rule for days the archive captured inflated transients.
+/// Run with the menu bar app quit. Refuses a day the logs no longer cover.
+enum Refreeze {
+    /// A live total this far below the archive means partial log rotation, not a
+    /// transient correction — refuse rather than truncate a real day.
+    private static let plausibleShrinkFloor = 0.8
+
+    static func run(days: [String], force: Bool) {
+        let records: [UsageRecord] = waitFor { done in
+            CombinedProvider([ClaudeNativeProvider(), CodexProvider()]).fetchRecords(completion: done)
+        }
+        guard let folder = LocalArchiveFolder() else {
+            FileHandle.standardError.write(Data("archive folder unavailable\n".utf8))
+            exit(1)
+        }
+        let archive = UsageArchive(folder: folder)
+        let snapshots = SnapshotStore()
+        let now = Date()
+        var failures = 0
+
+        backUp(days: days)
+
+        // Dashboard semantics: collapse the WHOLE corpus first, then bucket by the
+        // surviving record's epoch — filtering by day first would count a
+        // midnight-straddling turn's superseded partials into the repaired day.
+        let collapsed = Dedup.collapse(records)
+
+        for day in days {
+            let dayRecords = collapsed.filter { DayBucket.day(epoch: $0.epoch) == day }
+            guard !dayRecords.isEmpty else {
+                FileHandle.standardError.write(Data("refuse \(day): live logs hold no records (rotated?)\n".utf8))
+                failures += 1
+                continue
+            }
+            let month = String(day.prefix(7))
+            let archiveTotal = archive.records(forMonths: [month])
+                .filter { DayBucket.day(epoch: $0.epoch) == day }
+                .reduce(0) { $0 + $1.totalTokens }
+            let liveTotal = dayRecords.reduce(0) { $0 + $1.totalTokens }
+            if !force, liveTotal < Int(Double(archiveTotal) * plausibleShrinkFloor) {
+                FileHandle.standardError.write(Data(
+                    "refuse \(day): live \(liveTotal) is >20% below archive \(archiveTotal) — partial rotation likely (--force to override)\n".utf8))
+                failures += 1
+                continue
+            }
+            guard let summary = UsageAggregator.daySummaries(
+                dayRecords, pricedAt: Int(now.timeIntervalSince1970), frozen: true,
+                assumeCollapsed: true).first else { failures += 1; continue }
+
+            guard archive.replaceDay(day, with: dayRecords) else {
+                FileHandle.standardError.write(Data("FAILED \(day): archive segment write failed\n".utf8))
+                failures += 1
+                continue
+            }
+            guard snapshots.overwrite(summary, now: now) else {
+                FileHandle.standardError.write(Data(
+                    "FAILED \(day): snapshot store refused (unreadable snapshots.ndjson?) — archive repaired, rerun after checking the file\n".utf8))
+                failures += 1
+                continue
+            }
+            print("\(day): frozen \(archiveTotal) → \(summary.total.total)")
+        }
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    /// Copy snapshots.ndjson and each affected month segment aside before mutating.
+    private static func backUp(days: [String]) {
+        guard let support = AppPaths.applicationSupport() else { return }
+        let dir = support.appendingPathComponent(
+            "backup-refreeze-\(Int(Date().timeIntervalSince1970))", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var sources = [support.appendingPathComponent("snapshots.ndjson")]
+        for month in Set(days.map { String($0.prefix(7)) }) {
+            sources.append(support.appendingPathComponent("archive")
+                .appendingPathComponent(archiveSegmentName(forMonth: month)))
+        }
+        for src in sources where FileManager.default.fileExists(atPath: src.path) {
+            try? FileManager.default.copyItem(at: src, to: dir.appendingPathComponent(src.lastPathComponent))
+        }
+        print("backup: \(dir.path)")
+    }
+}
+
 /// Builds every Statistics period against REAL data and checks the invariants the
 /// sub-pages rely on: per-day rows sum to the period total, and each period's
 /// alternate chart (hourly / week slots / weekly rollup) preserves that total.

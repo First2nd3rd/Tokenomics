@@ -219,6 +219,29 @@ final class UsageArchive {
         segmentCacheLock.unlock()
     }
 
+    /// Surgical replace of ONE day's records inside its month segment — the
+    /// `--refreeze` repair path. Deliberately bypasses the merge-keeps-max rule:
+    /// the caller asserts `records` are that day's truth (from the live logs), so
+    /// the archive's inflated transients for the day must not survive the merge.
+    @discardableResult
+    func replaceDay(_ day: String, with records: [UsageRecord],
+                    calendar: Calendar = .current) -> Bool {
+        queue.sync {
+            let month = String(day.prefix(7))
+            let kept = rawSegment(month).filter { DayBucket.day(epoch: $0.epoch, calendar: calendar) != day }
+            let merged = Dedup.collapse(kept + records, foldKeyless: true)
+            let data = ArchiveFile.encode(records: merged, month: month, machineId: machineId,
+                                          displayName: displayName(), appVersion: appVersion,
+                                          updatedAt: Int(Date().timeIntervalSince1970))
+            guard (try? folder.writeSegment(data, month: month)) != nil else { return false }
+            segmentCacheLock.lock()
+            segmentCache.removeValue(forKey: month)
+            collapsedCache = nil
+            segmentCacheLock.unlock()
+            return true
+        }
+    }
+
     // MARK: - Helpers
 
     /// The current month plus the previous calendar month — the only segments steady-
