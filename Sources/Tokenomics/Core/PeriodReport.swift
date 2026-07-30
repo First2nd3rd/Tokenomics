@@ -44,12 +44,15 @@ struct PeriodReport: Codable, Equatable {
     let projectedTokens: Int?   // end-of-period projection (in-progress week/month only)
     let projectedCost: Double?
     let pricesFrozen: Bool      // every completed day's cost came from a frozen snapshot
+    /// Hour-of-day buckets (24), day period only — the single-day intraday chart.
+    let hourly: [TokenCounts]?
 
     /// Build a report from per-day summaries spanning at least this period and the
     /// previous one — the unit that blends frozen snapshots with live-computed days.
     /// Everything derives under `calendar`'s timezone.
     static func make(daySummaries: [DaySnapshot], period: ReportPeriod, anchor: Date,
-                     now: Date = Date(), calendar: Calendar = .current) -> PeriodReport {
+                     now: Date = Date(), calendar: Calendar = .current,
+                     hourly: [TokenCounts]? = nil) -> PeriodReport {
         let range = period.range(containing: anchor, calendar: calendar)
         let prior = period.previous(range, calendar: calendar)
         // ISO day keys order lexically, so range membership is a string compare.
@@ -124,7 +127,7 @@ struct PeriodReport: Codable, Equatable {
                             dailyAverage: dailyAverage, longestStreak: longestStreak,
                             previousTokens: previousTokens, previousCost: previousCost,
                             projectedTokens: projectedTokens, projectedCost: projectedCost,
-                            pricesFrozen: pricesFrozen)
+                            pricesFrozen: pricesFrozen, hourly: hourly)
     }
 
     /// Convenience: build from raw records (live cost, nothing frozen). Used by tests

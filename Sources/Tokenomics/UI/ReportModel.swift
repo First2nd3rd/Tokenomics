@@ -28,12 +28,25 @@ final class ReportModel: ObservableObject {
     /// so a slow older load can't overwrite a newer period's data.
     private var generation = 0
 
+    /// Last built report per period+range, shown INSTANTLY on a switch while the
+    /// fresh build replaces it in the background — without this, switching
+    /// granularity leaves the previous period's content on screen for the whole
+    /// build. Session-lifetime; reset wholesale if it ever grows past bounds.
+    private var built: [String: PeriodReport] = [:]
+    private static let builtLimit = 32
+
     func reload() {
         generation += 1
         let requested = generation
+        let key = "\(period.rawValue)|\(period.range(containing: anchor).key)"
+        if let cached = built[key] { report = cached }
         isLoading = true
         loader(period, anchor) { [weak self] report in
             guard let self, self.generation == requested else { return }
+            if let report {
+                if self.built.count >= Self.builtLimit { self.built.removeAll() }
+                self.built[key] = report
+            }
             self.report = report
             self.isLoading = false
         }

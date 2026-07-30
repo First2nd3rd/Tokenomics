@@ -101,6 +101,21 @@ enum UsageAggregator {
         .sorted { $0.date < $1.date }
     }
 
+    /// 24 hour-of-day buckets (tokens by type) for one local day, from ALREADY-
+    /// collapsed records — the day report's intraday chart. Hours follow
+    /// `calendar`'s timezone, same as every other day boundary here.
+    static func hourlyCounts(collapsed: [UsageRecord], day: String,
+                             calendar: Calendar = .current) -> [TokenCounts] {
+        var hours = Array(repeating: TokenCounts(), count: 24)
+        for r in collapsed {
+            let (recordDay, minute) = DayBucket.dayMinute(epoch: r.epoch, calendar: calendar)
+            guard recordDay == day else { continue }
+            hours[minute / 60].add(input: r.input, output: r.output,
+                                   cacheCreation: r.cacheCreation, cacheRead: r.cacheRead)
+        }
+        return hours
+    }
+
     /// Total read-time cost of a record set (per-record pricing, summed). Unknown
     /// models (e.g. `<synthetic>`) price to $0.
     static func cost(_ records: [UsageRecord]) -> Double {

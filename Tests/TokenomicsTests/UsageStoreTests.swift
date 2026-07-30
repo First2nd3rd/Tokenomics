@@ -297,6 +297,72 @@ struct UsageStoreTests {
         #expect(report?.total.total == 10)  // the menu bar's number, not 999
     }
 
+    @Test("report reuses the last tick's snapshot instead of refetching")
+    func reportReusesTickSnapshot() async {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        let growing = GrowingStub(id: "claude-native", records: [record(.claude, key: "A", input: 10)])
+        let store = UsageStore(localProviders: [growing], folder: TestFolder(), archive: archive,
+                               snapshots: nil,
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { true },
+                               deliver: immediate)
+
+        _ = await withCheckedContinuation { c in
+            store.refreshTick(lastDays: 14) { c.resume(returning: $0) }
+        }
+        // New usage lands after the tick; the report must show the TICK's snapshot
+        // (what the menu bar rendered), not a fresher refetch.
+        growing.records.append(record(.claude, key: "B", input: 5))
+        let report = await withCheckedContinuation { c in
+            store.report(period: .day, anchor: Date()) { c.resume(returning: $0) }
+        }
+        #expect(report?.total.total == 10)
+    }
+
+    @Test("a day report buckets today's live records by hour")
+    func dayReportHourlyFromLive() async {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        let local = [RecordStub(id: "claude-native", records: [record(.claude, key: "L", input: 10)])]
+        let store = UsageStore(localProviders: local, folder: TestFolder(), archive: archive,
+                               snapshots: nil,
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { true },
+                               deliver: immediate)
+
+        let report = await withCheckedContinuation { c in
+            store.report(period: .day, anchor: Date()) { c.resume(returning: $0) }
+        }
+        let hourly = report?.hourly
+        #expect(hourly?.count == 24)
+        #expect(hourly?.reduce(0) { $0 + $1.total } == 10)     // all buckets sum to the day
+        let hour = Calendar.current.component(.hour, from: Date())
+        #expect(hourly?[hour].total == 10)                     // and land in the current hour
+    }
+
+    @Test("a past-day report buckets its archive records by hour")
+    func dayReportHourlyFromArchive() async {
+        let af = MemoryArchiveFolder()
+        let archive = UsageArchive(folder: af, machineId: "own", displayName: { "own" }, appVersion: "0")
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+        var r = record(.claude, key: "Y", input: 30)
+        r = UsageRecord(source: r.source, key: r.key, epoch: Int(yesterday.timeIntervalSince1970),
+                        input: r.input, output: 0, cacheCreation: 0, cacheRead: 0, model: r.model)
+        archive.ingest([r])
+        let local = [RecordStub(id: "claude-native", records: [])]
+        let store = UsageStore(localProviders: local, folder: TestFolder(), archive: archive,
+                               snapshots: nil,
+                               machineId: "own", isSyncEnabled: { false }, isArchiveEnabled: { true },
+                               deliver: immediate)
+
+        let report = await withCheckedContinuation { c in
+            store.report(period: .day, anchor: yesterday) { c.resume(returning: $0) }
+        }
+        #expect(report?.total.total == 30)
+        #expect(report?.hourly?.reduce(0) { $0 + $1.total } == 30)
+        let hour = Calendar.current.component(.hour, from: yesterday)
+        #expect(report?.hourly?[hour].total == 30)
+    }
+
     @Test("a report for a past period reads the archive as-is, no ingest")
     func pastReportSkipsIngest() async {
         let af = MemoryArchiveFolder()

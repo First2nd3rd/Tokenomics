@@ -12,6 +12,28 @@ private func waitFor<T>(_ fetch: (@escaping (T) -> Void) -> Void) -> T {
     return result
 }
 
+/// Times report builds per period, twice each (cold, then warm caches), to see
+/// where a Statistics period switch spends its time. Invoked with `--bench-report`.
+enum BenchReport {
+    static func run() {
+        // Deliver inline: this CLI has no main run loop to drain the default hop.
+        let store = UsageStore(deliver: { work in work() })
+        for period in [ReportPeriod.day, .week, .month] {
+            for attempt in 1...2 {
+                let start = Date()
+                let report: PeriodReport? = waitFor { done in
+                    store.report(period: period, anchor: Date(), completion: done)
+                }
+                let ms = Date().timeIntervalSince(start) * 1000
+                let total = report?.total.total ?? -1
+                FileHandle.standardError.write(Data(
+                    String(format: "%@ #%d: %.0f ms (total %d)\n",
+                           period.label, attempt, ms, total).utf8))
+            }
+        }
+    }
+}
+
 /// Times two consecutive reads on one provider instance: the first does the full
 /// scan, the second should hit the mtime cache. Invoked with `--bench`.
 enum Bench {

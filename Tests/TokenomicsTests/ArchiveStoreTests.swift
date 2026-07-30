@@ -41,6 +41,23 @@ struct ArchiveStoreTests {
         #expect(archive.availableMonths() == ["2026-05", "2026-06"])
     }
 
+    @Test("the segment cache serves repeat reads and is invalidated by our own writes")
+    func segmentCacheInvalidation() {
+        let folder = LocalArchiveFolder(tempDir())
+        let archive = UsageArchive(folder: folder)
+        let month = DayBucket.month(epoch: Int(Date().timeIntervalSince1970))
+        let now = Int(Date().timeIntervalSince1970)
+
+        archive.ingest([rec(.claude, key: "A", output: 5, epoch: now)])
+        #expect(archive.records(forMonths: [month]).count == 1)     // populates the cache
+
+        // A later ingest writes the segment; the cached copy must not mask it.
+        archive.ingest([rec(.claude, key: "A", output: 5, epoch: now),
+                        rec(.claude, key: "B", output: 7, epoch: now)])
+        #expect(archive.records(forMonths: [month]).count == 2)
+        #expect(archive.records(forMonths: [month]).count == 2)     // and repeat reads hold
+    }
+
     @Test("reads records across months, collapsed once")
     func readsAcrossMonths() throws {
         let folder = LocalArchiveFolder(tempDir())

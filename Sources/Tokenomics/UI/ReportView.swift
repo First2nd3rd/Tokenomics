@@ -71,12 +71,24 @@ struct ReportView: View {
         Section {
             headline(r)
         }
-        Section("Daily") {
-            VStack(alignment: .leading, spacing: 8) {
-                ChartKit.dailyBars(r.days, width: chartWidth)
-                ChartKit.tokenLegend()
+        // A single day gets its intraday shape (hour-of-day bars); one lone daily
+        // bar says nothing. Multi-day periods keep the daily series.
+        if r.period == .day, let hourly = r.hourly {
+            Section("By Hour") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ChartKit.hourlyBars(hourly, width: chartWidth)
+                    ChartKit.tokenLegend()
+                }
+                .padding(.vertical, 2)
             }
-            .padding(.vertical, 2)
+        } else {
+            Section("Daily") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ChartKit.dailyBars(r.days, width: chartWidth)
+                    ChartKit.tokenLegend()
+                }
+                .padding(.vertical, 2)
+            }
         }
         // A month of daily bars is hard to read at a glance; the weekly rollup
         // (bars keyed by each week's start day) gives the coarse shape. Same

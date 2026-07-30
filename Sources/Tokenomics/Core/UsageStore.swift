@@ -66,6 +66,28 @@ final class UsageStore {
         let machines: [MachineSummary]
     }
 
+    /// The last fetched local records, reused by report() while fresh — a
+    /// Statistics reload then skips a full provider fetch AND shows literally the
+    /// snapshot the menu bar rendered. One tick of staleness (the menu bar's own
+    /// cadence) is the accepted bound. Guarded by `recentRecordsGate`.
+    private var recentRecords: (records: [UsageRecord], at: Date)?
+    private let recentRecordsGate = NSLock()
+    private static let recentRecordsMaxAge: TimeInterval = 90
+
+    private func rememberRecords(_ records: [UsageRecord], at: Date) {
+        recentRecordsGate.lock()
+        recentRecords = (records, at)
+        recentRecordsGate.unlock()
+    }
+
+    private func freshRecords(now: Date) -> [UsageRecord]? {
+        recentRecordsGate.lock()
+        defer { recentRecordsGate.unlock() }
+        guard let recent = recentRecords,
+              now.timeIntervalSince(recent.at) <= Self.recentRecordsMaxAge else { return nil }
+        return recent.records
+    }
+
     /// One-shot per-tick refresh: fetch local (+ peers when sync is on) once,
     /// collapse once, derive every view, and run the throttled persist pass on the
     /// same records. Delivered ready for UI.
@@ -74,6 +96,7 @@ final class UsageStore {
         let syncOn = isSyncEnabled()
         fetchTickRecords(syncOn: syncOn) { [weak self] local, combined in
             guard let self else { return }
+            self.rememberRecords(local, at: now)
             let collapsed = Dedup.collapse(combined)
             let byVendor = UsageAggregator.byVendor(collapsed: collapsed)
             let (c, l) = UsageAggregator.splitDayMinuteMatrix(collapsed: collapsed)
@@ -210,9 +233,18 @@ final class UsageStore {
         // variant, so a superseded streamed line is never corrected down).
         // Historical days still come from frozen snapshots + the archive.
         if period.range(containing: anchor).contains(now) {
-            CombinedProvider(localProviders).fetchRecords { [weak self] records in
-                self?.buildReport(archive: archive, period: period, anchor: anchor,
-                                  now: now, liveRecords: records, completion: completion)
+            // Reuse the tick's snapshot when fresh — no refetch, and identical to
+            // what the menu bar shows. Rapid period switches all hit this memo.
+            if let records = freshRecords(now: now) {
+                buildReport(archive: archive, period: period, anchor: anchor,
+                            now: now, liveRecords: records, completion: completion)
+            } else {
+                CombinedProvider(localProviders).fetchRecords { [weak self] records in
+                    guard let self else { return }
+                    self.rememberRecords(records, at: now)
+                    self.buildReport(archive: archive, period: period, anchor: anchor,
+                                     now: now, liveRecords: records, completion: completion)
+                }
             }
         } else {
             buildReport(archive: archive, period: period, anchor: anchor,
@@ -235,9 +267,9 @@ final class UsageStore {
             // Un-snapshotted days from the raw archive — minus today when the live
             // stream supersedes it below.
             let range = period.range(containing: anchor)
+            let archiveRecords = archive.records(forMonths: range.segmentsToRead())
             let archived = UsageAggregator
-                .daySummaries(archive.records(forMonths: range.segmentsToRead()),
-                              pricedAt: pricedAt, frozen: false)
+                .daySummaries(archiveRecords, pricedAt: pricedAt, frozen: false)
                 .filter { !have.contains($0.date) && (liveRecords == nil || $0.date != todayKey) }
             // Today, straight from the logs with the dashboard's exact collapse
             // (keyless records all kept), so this figure matches the menu bar.
@@ -247,8 +279,19 @@ final class UsageStore {
                 today = UsageAggregator.daySummaries(todays, pricedAt: pricedAt,
                                                      frozen: false, foldKeyless: false)
             }
+            // The day view swaps the (single-bar) daily chart for an hour-of-day
+            // one: today buckets the live stream, a past day its archive records.
+            var hourly: [TokenCounts]?
+            if period == .day {
+                if let liveRecords, range.key == todayKey {
+                    hourly = UsageAggregator.hourlyCounts(collapsed: Dedup.collapse(liveRecords),
+                                                          day: range.key)
+                } else {
+                    hourly = UsageAggregator.hourlyCounts(collapsed: archiveRecords, day: range.key)
+                }
+            }
             let report = PeriodReport.make(daySummaries: frozen + archived + today,
-                                           period: period, anchor: anchor, now: now)
+                                           period: period, anchor: anchor, now: now, hourly: hourly)
             deliver { completion(report) }
         }
     }

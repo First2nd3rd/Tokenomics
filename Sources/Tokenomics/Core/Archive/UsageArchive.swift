@@ -19,6 +19,14 @@ final class UsageArchive {
     private let queue = DispatchQueue(label: "\(AppPaths.bundleID).archive", qos: .utility)
     private var lastFingerprint: Int?
 
+    /// Decoded segments keyed by month, stamped with the file's (mtime, size) — a
+    /// Statistics reload otherwise re-decodes several MB of JSON per switch. Writes
+    /// through this instance invalidate eagerly; an external writer is caught by the
+    /// stamp. Files that can't be stat-ed (in-memory test folders) skip caching.
+    private struct CachedSegment { let mtime: Int; let size: Int; let records: [UsageRecord] }
+    private var segmentCache: [String: CachedSegment] = [:]
+    private let segmentCacheLock = NSLock()
+
     init(folder: ArchiveFolder,
          machineId: String = DeviceIdentity.id,
          displayName: @escaping () -> String = { DeviceIdentity.displayName() },
@@ -53,7 +61,26 @@ final class UsageArchive {
     private func rawSegment(_ month: String) -> [UsageRecord] {
         guard let dir = folder.directoryURL else { return [] }
         let url = dir.appendingPathComponent(archiveSegmentName(forMonth: month))
+
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let mtime = Int((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)
+        let size = (attrs?[.size] as? Int) ?? -1
+        if attrs != nil {
+            segmentCacheLock.lock()
+            if let hit = segmentCache[month], hit.mtime == mtime, hit.size == size {
+                let records = hit.records
+                segmentCacheLock.unlock()
+                return records
+            }
+            segmentCacheLock.unlock()
+        }
+
         guard let data = folder.readData(at: url), let contents = ArchiveFile.decode(data) else { return [] }
+        if attrs != nil {
+            segmentCacheLock.lock()
+            segmentCache[month] = CachedSegment(mtime: mtime, size: size, records: contents.records)
+            segmentCacheLock.unlock()
+        }
         return contents.records
     }
 
@@ -142,6 +169,11 @@ final class UsageArchive {
                                       displayName: displayName(), appVersion: appVersion,
                                       updatedAt: Int(Date().timeIntervalSince1970))
         try? folder.writeSegment(data, month: month)
+        // Same-second rewrites by THIS process would fool the mtime stamp;
+        // invalidating here keeps our own writes always visible.
+        segmentCacheLock.lock()
+        segmentCache.removeValue(forKey: month)
+        segmentCacheLock.unlock()
     }
 
     // MARK: - Helpers

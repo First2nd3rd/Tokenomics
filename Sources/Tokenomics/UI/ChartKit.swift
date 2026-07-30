@@ -69,6 +69,30 @@ enum ChartKit {
         .frame(width: width, height: height)
     }
 
+    /// Stacked hour-of-day bars (by token type) for one day's 24 buckets, at `width`.
+    static func hourlyBars(_ hours: [TokenCounts], width: CGFloat, height: CGFloat = 130) -> some View {
+        Chart {
+            ForEach(Array(hours.enumerated()), id: \.offset) { hour, counts in
+                ForEach(tokenBands) { band in
+                    BarMark(x: .value("Hour", String(format: "%02d", hour)),
+                            y: .value("Tokens", band.value(counts)))
+                        .foregroundStyle(by: .value("Type", band.name))
+                }
+            }
+        }
+        .chartForegroundStyleScale(domain: tokenBands.map(\.name), range: tokenBands.map(\.color))
+        .chartLegend(.hidden)
+        .chartYScale(domain: 0...yUpper(hours.map(\.total).max() ?? 0))
+        .chartXAxis {
+            AxisMarks(values: ["00", "06", "12", "18"]) { value in
+                AxisGridLine()
+                AxisValueLabel { if let h = value.as(String.self) { Text("\(h):00") } }
+            }
+        }
+        .chartYAxis { tokenAxis() }
+        .frame(width: width, height: height)
+    }
+
     /// ~6 evenly spaced day keys to label so a month of bars doesn't crowd the axis.
     private static func sparseLabels(_ days: [DailyUsage]) -> [String] {
         guard !days.isEmpty else { return [] }

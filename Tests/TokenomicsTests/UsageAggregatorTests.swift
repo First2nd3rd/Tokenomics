@@ -2,6 +2,39 @@ import Testing
 import Foundation
 @testable import Tokenomics
 
+@Suite("UsageAggregator.hourlyCounts")
+struct HourlyCountsTests {
+    /// Fixed UTC calendar so hour buckets are deterministic on any machine.
+    private var cal: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC")!
+        return c
+    }
+    private func epoch(_ h: Int, _ min: Int = 0) -> Int {
+        Int(cal.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: h, minute: min))!
+            .timeIntervalSince1970)
+    }
+    private func rec(key: String, input: Int, epoch: Int) -> UsageRecord {
+        UsageRecord(source: .claude, key: key, epoch: epoch,
+                    input: input, output: 0, cacheCreation: 0, cacheRead: 0, model: "m")
+    }
+
+    @Test("buckets records into their local hour and ignores other days")
+    func hourBuckets() {
+        let records = [
+            rec(key: "a", input: 10, epoch: epoch(9, 5)),
+            rec(key: "b", input: 20, epoch: epoch(9, 55)),
+            rec(key: "c", input: 30, epoch: epoch(23)),
+            rec(key: "other", input: 999, epoch: epoch(9) + 86_400),   // next day
+        ]
+        let hours = UsageAggregator.hourlyCounts(collapsed: records, day: "2026-07-20", calendar: cal)
+        #expect(hours.count == 24)
+        #expect(hours[9].total == 30)
+        #expect(hours[23].total == 30)
+        #expect(hours.reduce(0) { $0 + $1.total } == 60)      // the other day is excluded
+    }
+}
+
 @Suite("UsageAggregator")
 struct UsageAggregatorTests {
 

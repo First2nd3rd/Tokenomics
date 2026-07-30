@@ -34,6 +34,10 @@ if CommandLine.arguments.contains("--bench") {
     Bench.run()
     exit(0)
 }
+if CommandLine.arguments.contains("--bench-report") {
+    BenchReport.run()
+    exit(0)
+}
 
 // Menu bar agent: no Dock icon, no main window (.accessory activation policy).
 let app = NSApplication.shared
