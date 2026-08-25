@@ -33,6 +33,18 @@ enum Format {
         return s.hasSuffix(".0") ? String(s.dropLast(2)) : s
     }
 
+    /// Whole-dollar cost with thousands grouping ("$32,666") for lifetime-scale
+    /// figures, where the compact forms drop legibility.
+    static func costGrouped(_ c: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = c >= 100 ? 0 : 2
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.usesGroupingSeparator = true
+        formatter.groupingSeparator = ","
+        return "$" + (formatter.string(from: NSNumber(value: c)) ?? String(format: "%.0f", c))
+    }
+
     /// Payback multiple like "2.3×" (one decimal under 10×, whole number beyond).
     static func multiple(_ x: Double) -> String {
         x >= 10 ? String(format: "%.0f×", x) : String(format: "%.1f×", x)
@@ -56,6 +68,53 @@ enum Format {
     static func shortMonthDay(_ isoDay: String) -> String {
         guard let date = isoDayParser.date(from: isoDay) else { return isoDay }
         return monthDayFormatter.string(from: date)
+    }
+
+    private static let monthParser: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM"
+        return f
+    }()
+
+    private static let monthFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM"
+        return f
+    }()
+
+    private static let monthDayYearFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM d, yyyy"
+        return f
+    }()
+
+    /// "2026-06" → "Jun". Returns the input unchanged if it can't be parsed.
+    static func shortMonth(_ monthKey: String) -> String {
+        guard let date = monthParser.date(from: monthKey) else { return monthKey }
+        return monthFormatter.string(from: date)
+    }
+
+    private static let monthYearFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM ’yy"
+        return f
+    }()
+
+    /// "2026-06" → "Jun ’26", for month axes spanning more than a year, where a
+    /// bare month name repeats ambiguously.
+    static func shortMonthYear(_ monthKey: String) -> String {
+        guard let date = monthParser.date(from: monthKey) else { return monthKey }
+        return monthYearFormatter.string(from: date)
+    }
+
+    /// "2026-05-20" → "May 20, 2026". Returns the input unchanged if it can't be parsed.
+    static func monthDayYear(_ isoDay: String) -> String {
+        guard let date = isoDayParser.date(from: isoDay) else { return isoDay }
+        return monthDayYearFormatter.string(from: date)
     }
 
     /// Day-over-day delta as "▲ 18%" / "▼ 5%". Nil when there's no baseline.

@@ -35,7 +35,14 @@ enum ReportMarkdown {
             }
         }
 
-        if !r.days.isEmpty {
+        // All time rolls the (long) daily series up into months; the period views
+        // keep their day-by-day table.
+        if let months = r.months, !months.isEmpty {
+            out += "\n## Monthly\n\n| Month | Tokens | Cost |\n| --- | ---: | ---: |\n"
+            for m in months {
+                out += "| \(m.month) | \(Format.tokensShort(m.tokens)) | \(Format.cost(m.cost)) |\n"
+            }
+        } else if !r.days.isEmpty {
             out += "\n## Daily\n\n| Day | Tokens | Cost |\n| --- | ---: | ---: |\n"
             for d in r.days {
                 out += "| \(d.date) | \(Format.tokensShort(d.totalTokens)) | \(Format.cost(d.totalCost)) |\n"

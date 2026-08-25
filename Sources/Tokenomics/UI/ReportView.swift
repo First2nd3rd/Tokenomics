@@ -32,7 +32,8 @@ struct ReportView: View {
                 }
             } else {
                 Section {
-                    Text("No usage recorded in this period.")
+                    Text(model.period == .all ? "No usage recorded yet."
+                                              : "No usage recorded in this period.")
                         .font(.callout).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 120)
                 }
@@ -69,14 +70,19 @@ struct ReportView: View {
             .pickerStyle(.segmented).labelsHidden()
 
             HStack(spacing: 14) {
-                Button { model.step(-1) } label: { Image(systemName: "chevron.left") }
-                    .buttonStyle(.borderless)
+                // All time is a single unbounded period — nothing to step through.
+                if model.period != .all {
+                    Button { model.step(-1) } label: { Image(systemName: "chevron.left") }
+                        .buttonStyle(.borderless)
+                }
                 Text(model.period.range(containing: model.anchor).title)
                     .font(.system(size: 13, weight: .medium))
                     .frame(minWidth: 190, alignment: .leading)
-                Button { model.step(1) } label: { Image(systemName: "chevron.right") }
-                    .buttonStyle(.borderless)
-                    .disabled(!model.canStepForward)
+                if model.period != .all {
+                    Button { model.step(1) } label: { Image(systemName: "chevron.right") }
+                        .buttonStyle(.borderless)
+                        .disabled(!model.canStepForward)
+                }
                 Spacer()
                 if model.isLoading { ProgressView().controlSize(.small) }
             }
@@ -87,6 +93,17 @@ struct ReportView: View {
     // MARK: - Content
 
     @ViewBuilder private func content(_ r: PeriodReport) -> some View {
+        if r.period == .all {
+            OverviewSections(r: r, syncOn: model.syncOn, chartWidth: chartWidth)
+        } else {
+            periodSections(r)
+        }
+        Section {
+            Button(copied ? "Copied ✓" : "Copy as Markdown") { copyMarkdown(r) }
+        }
+    }
+
+    @ViewBuilder private func periodSections(_ r: PeriodReport) -> some View {
         Section {
             headline(r)
         }
@@ -150,12 +167,9 @@ struct ReportView: View {
                 .padding(.vertical, 2)
             }
         }
-        if !r.byVendor.isEmpty { Section("By Vendor") { vendorRows(r) } }
-        if !r.byModel.isEmpty { Section("By Model") { modelRows(r) } }
+        if !r.byVendor.isEmpty { Section("By Vendor") { VendorRows(vendors: r.byVendor, width: chartWidth) } }
+        if !r.byModel.isEmpty { Section("By Model") { ModelRows(models: r.byModel, width: chartWidth) } }
         Section("Stats") { statsGrid(r) }
-        Section {
-            Button(copied ? "Copied ✓" : "Copy as Markdown") { copyMarkdown(r) }
-        }
     }
 
     private func copyMarkdown(_ r: PeriodReport) {
@@ -181,69 +195,9 @@ struct ReportView: View {
                         .font(.caption).foregroundStyle(Color.accentColor)
                 }
             }
-            notes(r)
+            ReportCaveats(syncOn: model.syncOn, pricesFrozen: r.pricesFrozen)
         }
         .padding(.vertical, 2)
-    }
-
-    @ViewBuilder private func notes(_ r: PeriodReport) -> some View {
-        if model.syncOn {
-            Text("This Mac only — excludes the other Macs shown on the dashboard.")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
-        if !r.pricesFrozen {
-            Text("Costs estimated at current prices.")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: - By vendor / by model
-
-    private func vendorRows(_ r: PeriodReport) -> some View {
-        let maxTokens = r.byVendor.map(\.tokens).max() ?? 0
-        return VStack(alignment: .leading, spacing: 8) {
-            ForEach(r.byVendor) { v in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text(v.vendor).font(.caption).fontWeight(.medium)
-                        Spacer()
-                        Text(Format.tokensShort(v.tokens)).font(.caption).foregroundStyle(.secondary)
-                        Text(Format.cost(v.cost)).font(.caption).foregroundStyle(.secondary)
-                            .frame(width: 72, alignment: .trailing)
-                    }
-                    ChartKit.proportionBar(
-                        fraction: maxTokens > 0 ? Double(v.tokens) / Double(maxTokens) : 0,
-                        color: vendorColor(v.vendor), width: chartWidth)
-                }
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func modelRows(_ r: PeriodReport) -> some View {
-        let top = Array(r.byModel.prefix(8))
-        let rest = r.byModel.dropFirst(8)
-        let restTokens = rest.reduce(0) { $0 + $1.tokens }
-        let restCost = rest.reduce(0.0) { $0 + $1.cost }
-        let maxTokens = r.byModel.map(\.tokens).max() ?? 0
-        return VStack(alignment: .leading, spacing: 6) {
-            ForEach(top) { m in modelRow(ModelColors.shortName(m.model), m.tokens, m.cost, max: maxTokens) }
-            if restTokens > 0 { modelRow("Other", restTokens, restCost, max: maxTokens) }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func modelRow(_ name: String, _ tokens: Int, _ cost: Double, max maxTokens: Int) -> some View {
-        HStack(spacing: 8) {
-            Text(name).font(.caption).frame(width: 120, alignment: .leading)
-            ChartKit.proportionBar(fraction: maxTokens > 0 ? Double(tokens) / Double(maxTokens) : 0,
-                                   color: .accentColor, width: chartWidth - 120 - 72 - 64)
-            Spacer(minLength: 0)
-            Text(Format.tokensShort(tokens)).font(.caption).foregroundStyle(.secondary)
-                .frame(width: 56, alignment: .trailing)
-            Text(Format.cost(cost)).font(.caption).foregroundStyle(.secondary)
-                .frame(width: 64, alignment: .trailing)
-        }
     }
 
     // MARK: - Stats
@@ -265,12 +219,5 @@ struct ReportView: View {
             }
         }
         .padding(.vertical, 2)
-    }
-
-    // MARK: - Helpers
-
-    /// Match the dashboard's vendor palette (Claude orange, GPT teal).
-    private func vendorColor(_ vendor: String) -> Color {
-        ModelColors.color(for: vendor == Vendor.claude.displayName ? "claude" : "gpt")
     }
 }

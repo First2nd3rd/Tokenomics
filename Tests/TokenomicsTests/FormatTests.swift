@@ -126,3 +126,35 @@ struct FormatDeltaPctTests {
         #expect(result == "\u{25BC} 50%")
     }
 }
+
+@Suite("Format month helpers")
+struct FormatMonthTests {
+    @Test("shortMonth renders a month key as its short name")
+    func shortMonth() {
+        #expect(Format.shortMonth("2026-06") == "Jun")
+        #expect(Format.shortMonth("2027-01") == "Jan")
+        #expect(Format.shortMonth("not-a-month") == "not-a-month")
+    }
+
+    @Test("monthDayYear renders a full date")
+    func monthDayYear() {
+        #expect(Format.monthDayYear("2026-05-20") == "May 20, 2026")
+        #expect(Format.monthDayYear("garbage") == "garbage")
+    }
+}
+
+@Suite("Format.costGrouped")
+struct FormatCostGroupedTests {
+    @Test("groups thousands and drops cents at scale")
+    func grouping() {
+        #expect(Format.costGrouped(32666.4) == "$32,666")
+        #expect(Format.costGrouped(1_234_567.0) == "$1,234,567")
+        #expect(Format.costGrouped(150.0) == "$150")
+    }
+
+    @Test("keeps cents while they are the story")
+    func smallAmounts() {
+        #expect(Format.costGrouped(3.28) == "$3.28")
+        #expect(Format.costGrouped(0.0) == "$0")
+    }
+}

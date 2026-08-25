@@ -123,6 +123,146 @@ enum ChartKit {
         .frame(width: width, height: height)
     }
 
+    /// Stacked monthly bars (by token type) for the all-time trend, at `width`.
+    static func monthlyBars(_ months: [MonthUsage], width: CGFloat, height: CGFloat = 130) -> some View {
+        Chart {
+            ForEach(months) { month in
+                ForEach(tokenBands) { band in
+                    BarMark(x: .value("Month", month.month),
+                            y: .value("Tokens", band.value(month.counts)))
+                        .foregroundStyle(by: .value("Type", band.name))
+                }
+            }
+        }
+        .chartForegroundStyleScale(domain: tokenBands.map(\.name), range: tokenBands.map(\.color))
+        .chartLegend(.hidden)
+        .chartYScale(domain: 0...yUpper(months.map(\.tokens).max() ?? 0))
+        .chartXAxis { monthAxis(months) }
+        .chartYAxis { tokenAxis() }
+        .frame(width: width, height: height)
+    }
+
+    /// The monthly by-model chart's prepared series: the top models across the span
+    /// (in ModelColors order, which is the stack + legend order), everything else
+    /// folded into an "Other" tail slice.
+    struct ModelSeries {
+        struct Slice: Identifiable {
+            let month: String
+            let model: String       // full id ("Other" for the tail)
+            let tokens: Int
+            var id: String { "\(month)|\(model)" }
+        }
+        let domain: [String]        // model ids, stack order (Other last)
+        let colors: [Color]
+        let labels: [String]        // legend display names
+        let slices: [Slice]
+    }
+
+    static func modelSeries(_ months: [MonthUsage], top: Int = 5) -> ModelSeries {
+        var totals: [String: Int] = [:]
+        for month in months {
+            for m in month.byModel { totals[m.model, default: 0] += m.tokens }
+        }
+        let topModels = Set(totals.sorted { $0.value > $1.value }.prefix(top).map(\.key))
+        let entries = ModelColors.assign(Array(topModels))
+
+        var slices: [ModelSeries.Slice] = []
+        var hasOther = false
+        for month in months {
+            var other = 0
+            var byModel: [String: Int] = [:]
+            for m in month.byModel {
+                if topModels.contains(m.model) { byModel[m.model, default: 0] += m.tokens }
+                else { other += m.tokens }
+            }
+            for entry in entries where byModel[entry.model] != nil {
+                slices.append(.init(month: month.month, model: entry.model, tokens: byModel[entry.model]!))
+            }
+            if other > 0 { slices.append(.init(month: month.month, model: "Other", tokens: other)); hasOther = true }
+        }
+
+        var domain = entries.map(\.model)
+        var colors = entries.map(\.color)
+        var labels = entries.map { ModelColors.shortName($0.model) }
+        if hasOther { domain.append("Other"); colors.append(.gray.opacity(0.55)); labels.append("Other") }
+        return ModelSeries(domain: domain, colors: colors, labels: labels, slices: slices)
+    }
+
+    /// Stacked monthly bars by MODEL (ModelColors palette: same vendor = same hue,
+    /// shade = price rank) — the all-time trend's model-mix page.
+    static func monthlyModelBars(_ months: [MonthUsage], series: ModelSeries,
+                                 width: CGFloat, height: CGFloat = 130) -> some View {
+        Chart {
+            ForEach(series.slices) { slice in
+                BarMark(x: .value("Month", slice.month),
+                        y: .value("Tokens", slice.tokens))
+                    .foregroundStyle(by: .value("Model", slice.model))
+            }
+        }
+        .chartForegroundStyleScale(domain: series.domain, range: series.colors)
+        .chartLegend(.hidden)
+        .chartYScale(domain: 0...yUpper(months.map(\.tokens).max() ?? 0))
+        .chartXAxis { monthAxis(months) }
+        .chartYAxis { tokenAxis() }
+        .frame(width: width, height: height)
+    }
+
+    /// Legend chips for the by-model series, mirroring `tokenLegend`.
+    static func modelLegend(_ series: ModelSeries) -> some View {
+        HStack(spacing: 10) {
+            ForEach(Array(series.domain.enumerated()), id: \.offset) { i, _ in
+                HStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 2).fill(series.colors[i]).frame(width: 8, height: 8)
+                    Text(series.labels[i])
+                }
+            }
+        }
+        .font(.caption2).foregroundStyle(.secondary)
+    }
+
+    /// Monthly cost bars — the one place cost is charted rather than printed.
+    /// Historical months carry frozen (then-current) prices, today's month is live.
+    static func costBars(_ months: [MonthUsage], width: CGFloat, height: CGFloat = 130) -> some View {
+        Chart {
+            ForEach(months) { month in
+                BarMark(x: .value("Month", month.month),
+                        y: .value("Cost", month.cost))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .chartYScale(domain: 0...max((months.map(\.cost).max() ?? 0) * 1.08, 1))
+        .chartXAxis { monthAxis(months) }
+        .chartYAxis {
+            AxisMarks { value in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let c = value.as(Double.self) { Text(c == 0 ? "$0" : Format.costCompact(c)) }
+                }
+            }
+        }
+        .frame(width: width, height: height)
+    }
+
+    /// Month-key ("2026-06") x-axis: short month names while a year fits, sparse
+    /// year-qualified labels ("Jun ’27") once the span would repeat bare names.
+    private static func monthAxis(_ months: [MonthUsage]) -> some AxisContent {
+        let withYear = months.count > 12
+        return AxisMarks(values: monthLabelKeys(months)) { value in
+            AxisValueLabel {
+                if let m = value.as(String.self) {
+                    Text(withYear ? Format.shortMonthYear(m) : Format.shortMonth(m))
+                }
+            }
+        }
+    }
+
+    /// Every month while they fit; sparse (~6) once the span grows past a year.
+    private static func monthLabelKeys(_ months: [MonthUsage]) -> [String] {
+        guard months.count > 12 else { return months.map(\.month) }
+        let step = max(1, months.count / 6)
+        return stride(from: 0, to: months.count, by: step).map { months[$0].month }
+    }
+
     /// ~6 evenly spaced day keys to label so a month of bars doesn't crowd the axis.
     private static func sparseLabels(_ days: [DailyUsage]) -> [String] {
         guard !days.isEmpty else { return [] }

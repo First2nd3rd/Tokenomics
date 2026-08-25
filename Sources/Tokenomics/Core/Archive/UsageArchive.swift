@@ -25,9 +25,16 @@ final class UsageArchive {
     /// stamp. Files that can't be stat-ed (in-memory test folders) skip caching.
     private struct CachedSegment { let mtime: Int; let size: Int; let records: [UsageRecord] }
     private var segmentCache: [String: CachedSegment] = [:]
-    /// Last collapsed cross-month read (see `records(forMonths:)`).
-    private struct CollapsedMonths { let key: String; let stamps: [String]; let records: [UsageRecord] }
-    private var collapsedCache: CollapsedMonths?
+    /// Recent collapsed cross-month reads keyed by months list (see
+    /// `records(forMonths:)`), LRU-evicted. Four slots because the report
+    /// granularities do NOT share one window: mid-month Day/Week span one month,
+    /// Month spans three, and the all-time page reads every archived month — with
+    /// a single slot each granularity switch would evict the others and re-collapse
+    /// the union.
+    private struct CollapsedMonths { let stamps: [String]; let records: [UsageRecord]; var lastUsed: Int }
+    private var collapsedCache: [String: CollapsedMonths] = [:]
+    private var collapsedCacheTick = 0
+    private static let collapsedCacheLimit = 4
     private let segmentCacheLock = NSLock()
 
     init(folder: ArchiveFolder,
@@ -66,7 +73,9 @@ final class UsageArchive {
         }
         let key = months.joined(separator: ",")
         segmentCacheLock.lock()
-        if let hit = collapsedCache, hit.key == key, hit.stamps == stamps {
+        if let hit = collapsedCache[key], hit.stamps == stamps {
+            collapsedCacheTick += 1
+            collapsedCache[key]?.lastUsed = collapsedCacheTick
             let records = hit.records
             segmentCacheLock.unlock()
             return records
@@ -75,7 +84,12 @@ final class UsageArchive {
 
         let collapsed = Dedup.collapse(months.flatMap(rawSegment), foldKeyless: true)
         segmentCacheLock.lock()
-        collapsedCache = CollapsedMonths(key: key, stamps: stamps, records: collapsed)
+        if collapsedCache[key] == nil, collapsedCache.count >= Self.collapsedCacheLimit,
+           let lru = collapsedCache.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key {
+            collapsedCache.removeValue(forKey: lru)
+        }
+        collapsedCacheTick += 1
+        collapsedCache[key] = CollapsedMonths(stamps: stamps, records: collapsed, lastUsed: collapsedCacheTick)
         segmentCacheLock.unlock()
         return collapsed
     }
@@ -215,7 +229,7 @@ final class UsageArchive {
         // invalidating here keeps our own writes always visible.
         segmentCacheLock.lock()
         segmentCache.removeValue(forKey: month)
-        collapsedCache = nil
+        collapsedCache.removeAll()
         segmentCacheLock.unlock()
     }
 
@@ -236,7 +250,7 @@ final class UsageArchive {
             guard (try? folder.writeSegment(data, month: month)) != nil else { return false }
             segmentCacheLock.lock()
             segmentCache.removeValue(forKey: month)
-            collapsedCache = nil
+            collapsedCache.removeAll()
             segmentCacheLock.unlock()
             return true
         }

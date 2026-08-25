@@ -277,8 +277,10 @@ final class UsageStore {
             // Un-snapshotted days from the raw archive (already collapsed by the
             // archive read). Nearly every past day is frozen, so those days are
             // dropped before the per-day aggregation; today is dropped too when
-            // the live stream supersedes it.
-            let archiveRecords = archive.records(forMonths: range.segmentsToRead())
+            // the live stream supersedes it. The all-time period spans whatever
+            // the archive holds rather than a range's month window.
+            let segments = period == .all ? archive.availableMonths() : range.segmentsToRead()
+            let archiveRecords = archive.records(forMonths: segments)
             var excludedDays = have
             if todayCollapsed != nil { excludedDays.insert(todayKey) }
             let archived = UsageAggregator
@@ -325,9 +327,11 @@ final class UsageStore {
                 if let todayCollapsed { slotRecords += todayCollapsed }
                 fine = UsageAggregator.slotCounts(collapsed: slotRecords, days: dayKeys, slotHours: 1)
             }
-            let report = PeriodReport.make(daySummaries: frozen + archived + today,
-                                           period: period, anchor: anchor, now: now,
-                                           hourly: hourly, fine: fine)
+            let report = period == .all
+                ? PeriodReport.makeAllTime(daySummaries: frozen + archived + today, now: now)
+                : PeriodReport.make(daySummaries: frozen + archived + today,
+                                    period: period, anchor: anchor, now: now,
+                                    hourly: hourly, fine: fine)
             deliver { completion(report) }
         }
     }

@@ -134,7 +134,7 @@ enum VerifyReport {
             if !ok { failures += 1 }
         }
 
-        for period in [ReportPeriod.day, .week, .month] {
+        for period in [ReportPeriod.day, .week, .month, .all] {
             guard let r: PeriodReport = waitFor({ done in
                 store.report(period: period, anchor: Date(), completion: done)
             }) else {
@@ -159,8 +159,15 @@ enum VerifyReport {
             case .month:
                 let weekly = r.weeklyRollup().reduce(0) { $0 + $1.totalTokens }
                 check("Month: weekly rollup sums to total", weekly == r.total.total)
+            case .all:
+                let monthly = (r.months ?? []).reduce(0) { $0 + $1.tokens }
+                check("All: monthly rollup sums to total", monthly == r.total.total)
             }
-            for day in r.days { print("\(period.label) \(day.date) \(day.totalTokens)") }
+            // The all-time day list spans the whole archive — the per-day dump
+            // stays scoped to the calendar periods.
+            if period != .all {
+                for day in r.days { print("\(period.label) \(day.date) \(day.totalTokens)") }
+            }
         }
         exit(failures == 0 ? 0 : 1)
     }

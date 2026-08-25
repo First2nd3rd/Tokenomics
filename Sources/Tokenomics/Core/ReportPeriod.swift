@@ -4,7 +4,7 @@ import Foundation
 /// analysis layer — the same archived records are bucketed into days, weeks, or
 /// months at read time, under the current timezone (like every other view).
 enum ReportPeriod: String, Codable, CaseIterable, Identifiable {
-    case day, week, month
+    case day, week, month, all
     var id: String { rawValue }
 
     var label: String {
@@ -12,6 +12,7 @@ enum ReportPeriod: String, Codable, CaseIterable, Identifiable {
         case .day: return "Day"
         case .week: return "Week"
         case .month: return "Month"
+        case .all: return "All"
         }
     }
 
@@ -20,11 +21,17 @@ enum ReportPeriod: String, Codable, CaseIterable, Identifiable {
         case .day: return .day
         case .week: return .weekOfYear
         case .month: return .month
+        case .all: return .era      // never stepped; `.all` has a single unbounded range
         }
     }
 
     /// The half-open [start, end) interval of the period containing `date`.
+    /// `.all` is one unbounded range — every date falls in it, so the navigator's
+    /// forward step stays disabled and the report path takes the live-today branch.
     func range(containing date: Date, calendar: Calendar = .current) -> PeriodRange {
+        if self == .all {
+            return PeriodRange(period: .all, start: .distantPast, end: .distantFuture, calendar: calendar)
+        }
         let interval = calendar.dateInterval(of: component, for: date)
             ?? DateInterval(start: date, duration: 86_400)
         return PeriodRange(period: self, start: interval.start, end: interval.end, calendar: calendar)
@@ -70,7 +77,10 @@ struct PeriodRange: Equatable {
     /// Archive segments ("YYYY-MM") to read for a report on this period: from the
     /// previous period's start (needed for the comparison) through this period's end,
     /// which folds in the next month as slack for a timezone shift after ingest.
+    /// `.all` spans the whole archive — the caller must use the archive's own month
+    /// list instead of spanning this range's unbounded dates.
     func segmentsToRead(calendar: Calendar = .current) -> [String] {
+        guard period != .all else { return [] }
         let prior = period.previous(self, calendar: calendar)
         return DayBucket.monthsSpanning(from: prior.start, to: end, calendar: calendar)
     }
@@ -85,6 +95,7 @@ struct PeriodRange: Equatable {
             let week = calendar.component(.weekOfYear, from: start)
             let year = calendar.component(.yearForWeekOfYear, from: start)
             return String(format: "%04d-W%02d", year, week)
+        case .all:   return "all"
         }
     }
 
@@ -96,6 +107,7 @@ struct PeriodRange: Equatable {
             let lastDay = end.addingTimeInterval(-1)
             return formatter("MMM d", calendar).string(from: start)
                 + " – " + formatter("MMM d, yyyy", calendar).string(from: lastDay)
+        case .all:   return "All Time"
         }
     }
 
