@@ -37,7 +37,8 @@ final class ClaudeNativeProvider: UsageProvider {
     /// All parsed records, re-parsing only files whose mtime/size changed; unchanged
     /// files reuse cached records, so the recurring refresh stays cheap once warm.
     private func cachedRecords() -> [UsageRecord] {
-        let files = Self.claudeProjectRoots().flatMap { Self.jsonlFiles(under: $0) }
+        let files = UsageSourceConfiguration.uniqueURLs(
+            Self.claudeProjectRoots().flatMap { Self.jsonlFiles(under: $0) })
         return cache.records(for: files, parse: Self.parseFile)
     }
 
@@ -89,32 +90,33 @@ final class ClaudeNativeProvider: UsageProvider {
     // MARK: - Discovery
 
     /// The `<base>/projects` directories to scan, mirroring ccusage's resolution.
-    static func claudeProjectRoots() -> [URL] {
+    static func claudeProjectRoots(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        additionalHomes: [URL]? = nil
+    ) -> [URL] {
         let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser
-        let env = ProcessInfo.processInfo.environment
 
         var bases: [URL] = []
-        if let configDir = env["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespaces),
+        if let configDir = environment["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespaces),
            !configDir.isEmpty {
             bases = configDir.split(separator: ",")
                 .map { URL(fileURLWithPath: String($0).trimmingCharacters(in: .whitespaces)) }
         } else {
-            let xdg = env["XDG_CONFIG_HOME"].map { URL(fileURLWithPath: $0) }
+            let xdg = environment["XDG_CONFIG_HOME"].map { URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".config")
             bases = [xdg.appendingPathComponent("claude"), home.appendingPathComponent(".claude")]
         }
+        bases.append(contentsOf: additionalHomes ?? UsageSourceConfiguration.load(home: home).claude)
 
-        var seen = Set<String>()
         var roots: [URL] = []
-        for base in bases {
+        for base in UsageSourceConfiguration.uniqueURLs(bases) {
             let projects = base.appendingPathComponent("projects")
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: projects.path, isDirectory: &isDir), isDir.boolValue else { continue }
-            let key = projects.standardizedFileURL.path
-            if seen.insert(key).inserted { roots.append(projects) }
+            roots.append(projects.standardizedFileURL.resolvingSymlinksInPath())
         }
-        return roots
+        return UsageSourceConfiguration.uniqueURLs(roots)
     }
 
     /// All `*.jsonl` under `projects`, recursing into nested subagent/workflow dirs.

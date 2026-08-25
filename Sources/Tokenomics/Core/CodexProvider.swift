@@ -42,7 +42,7 @@ final class CodexProvider: UsageProvider {
 
     /// All parsed records, re-parsing only rollout files whose mtime/size changed.
     private func cachedRecords() -> [UsageRecord] {
-        cache.records(for: Self.rolloutFiles(), parse: Self.parseFile)
+        cache.records(for: Self.rolloutFiles(in: Self.codexHomes()), parse: Self.parseFile)
     }
 
     // MARK: - Parsing
@@ -185,23 +185,34 @@ final class CodexProvider: UsageProvider {
 
     // MARK: - Discovery
 
-    /// All `rollout-*.jsonl` under `~/.codex/sessions` (or `$CODEX_HOME`).
-    private static func rolloutFiles() -> [URL] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let base = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+    /// The existing default (`$CODEX_HOME`, else `~/.codex`) plus any roots from
+    /// `~/.config/tokenomics/sources.json`.
+    static func codexHomes(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        additionalHomes: [URL]? = nil
+    ) -> [URL] {
+        let primary = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? home.appendingPathComponent(".codex")
-        let sessions = base.appendingPathComponent("sessions")
+        let additional = additionalHomes ?? UsageSourceConfiguration.load(home: home).codex
+        return UsageSourceConfiguration.uniqueURLs([primary] + additional)
+    }
 
-        guard let enumerator = FileManager.default.enumerator(
-            at: sessions, includingPropertiesForKeys: nil
-        ) else { return [] }
-
+    /// All `rollout-*.jsonl` under every configured Codex home's `sessions/` tree.
+    static func rolloutFiles(in homes: [URL]) -> [URL] {
+        let fm = FileManager.default
         var files: [URL] = []
-        for case let url as URL in enumerator
-        where url.pathExtension == "jsonl" && url.lastPathComponent.hasPrefix("rollout-") {
-            files.append(url)
+        for home in UsageSourceConfiguration.uniqueURLs(homes) {
+            let sessions = home.appendingPathComponent("sessions")
+            guard let enumerator = fm.enumerator(
+                at: sessions, includingPropertiesForKeys: nil
+            ) else { continue }
+            for case let url as URL in enumerator
+            where url.pathExtension == "jsonl" && url.lastPathComponent.hasPrefix("rollout-") {
+                files.append(url)
+            }
         }
-        return files
+        return UsageSourceConfiguration.uniqueURLs(files).sorted { $0.path < $1.path }
     }
 }
 
