@@ -185,17 +185,23 @@ final class CodexProvider: UsageProvider {
 
     // MARK: - Discovery
 
-    /// The existing default (`$CODEX_HOME`, else `~/.codex`) plus any roots from
-    /// `~/.config/tokenomics/sources.json`.
+    /// The standard `~/.codex` home plus `$CODEX_HOME` (when set) and any roots
+    /// from `~/.config/tokenomics/sources.json`. Tokenomics aggregates local usage,
+    /// so an inherited isolated environment adds a source rather than hiding the
+    /// standard one.
     static func codexHomes(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         additionalHomes: [URL]? = nil
     ) -> [URL] {
-        let primary = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
-            ?? home.appendingPathComponent(".codex")
+        var homes = [home.appendingPathComponent(".codex")]
+        if let environmentHome = environment["CODEX_HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !environmentHome.isEmpty {
+            homes.append(URL(fileURLWithPath: environmentHome))
+        }
         let additional = additionalHomes ?? UsageSourceConfiguration.load(home: home).codex
-        return UsageSourceConfiguration.uniqueURLs([primary] + additional)
+        return UsageSourceConfiguration.uniqueURLs(homes + additional)
     }
 
     /// All `rollout-*.jsonl` under every configured Codex home's `sessions/` tree.

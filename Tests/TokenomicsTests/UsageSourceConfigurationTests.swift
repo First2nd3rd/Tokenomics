@@ -97,6 +97,24 @@ struct UsageSourceConfigurationTests {
         #expect(Set(files.map(\.path)) == Set([first.path, second.path]))
     }
 
+    @Test("Codex keeps the standard home when launched from an isolated environment")
+    func codexEnvironmentDoesNotReplaceStandardHome() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let standard = root.appendingPathComponent(".codex")
+        let isolated = root.appendingPathComponent(".codex-b")
+        try makeDirectory(standard.appendingPathComponent("sessions"))
+        try makeDirectory(isolated.appendingPathComponent("sessions"))
+
+        let homes = CodexProvider.codexHomes(
+            home: root,
+            environment: ["CODEX_HOME": isolated.path],
+            additionalHomes: [isolated]
+        )
+
+        #expect(Set(homes.map(\.path)) == Set([standard.path, isolated.path]))
+    }
+
     @Test("Claude discovers projects under every configured home")
     func claudeMultipleHomes() throws {
         let root = try temporaryDirectory()

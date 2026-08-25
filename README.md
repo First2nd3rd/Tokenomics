@@ -47,7 +47,7 @@ a small parse cache. Per-day token and cost totals are verified to match
 | Source | Location | Notes |
 |--------|----------|-------|
 | Claude Code | `$CLAUDE_CONFIG_DIR`, else `~/.config/claude` then `~/.claude` → `projects/**/*.jsonl` | Mirrors `ccusage`: globs all depths, dedups assistant turns by `message.id:requestId` keeping the max output, tags priority ("fast") turns at 6× price. Additional homes can be listed in `~/.config/tokenomics/sources.json`. |
-| Codex | `$CODEX_HOME`, else `~/.codex` → `sessions/**/rollout-*.jsonl` | `token_count` events are counted per turn (`last_token_usage`; sub-turns don't advance the session cumulative), bucketed by local day; old rollouts fall back to cumulative deltas. Additional homes can be listed in `~/.config/tokenomics/sources.json`. |
+| Codex | `~/.codex`, plus `$CODEX_HOME` when set → `sessions/**/rollout-*.jsonl` | `token_count` events are counted per turn (`last_token_usage`; sub-turns don't advance the session cumulative), bucketed by local day; old rollouts fall back to cumulative deltas. Additional homes can be listed in `~/.config/tokenomics/sources.json`. |
 | Pricing | [LiteLLM](https://github.com/BerriAI/litellm) model price JSON | Fetched and disk-cached (refreshed at most daily); a bundled snapshot is the fallback. Cost is recomputed from live prices, so updating prices never needs a rebuild. |
 
 Parsing is incremental: each file's parsed records are cached by `(mtime, size)`
