@@ -17,8 +17,9 @@ enum UsageAggregator {
     /// mapping stable — `Vendor.providerID` depends on these exact strings.
     static func vendorId(for source: UsageSource) -> String {
         switch source {
-        case .claude: return "claude-native"
-        case .codex:  return "codex"
+        case .claude:    return "claude-native"
+        case .codex:     return "codex"
+        case .workbuddy: return "workbuddy"
         }
     }
 

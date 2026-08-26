@@ -28,9 +28,10 @@ struct VendorRows: View {
         .padding(.vertical, 2)
     }
 
-    /// Match the dashboard's vendor palette (Claude orange, GPT teal).
+    /// Match the dashboard's vendor palette (Claude orange, GPT teal, WorkBuddy purple).
     static func color(for vendor: String) -> Color {
-        ModelColors.color(for: vendor == Vendor.claude.displayName ? "claude" : "gpt")
+        let match = Vendor.allCases.first { $0.displayName == vendor }
+        return ModelColors.color(for: match?.representativeModel ?? "other")
     }
 }
 

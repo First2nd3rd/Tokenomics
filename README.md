@@ -8,8 +8,9 @@ break-even.
 > Think iStat Menus, but for how many tokens (and how much $) your AI coding
 > agents are eating each day.
 
-It reads usage **directly from the local logs** Claude Code and Codex already
-write (`~/.claude`, `~/.codex`) — Tokenomics keeps no usage log of its own, only
+It reads usage **directly from the local logs** Claude Code, Codex, and WorkBuddy
+already write (`~/.claude`, `~/.codex`, `~/.workbuddy`) — Tokenomics keeps no usage
+log of its own, only
 a small parse cache. Per-day token and cost totals are verified to match
 [`ccusage`](https://github.com/ryoppippi/ccusage) exactly.
 
@@ -39,7 +40,7 @@ a small parse cache. Per-day token and cost totals are verified to match
   Claude clears its logs (Settings → *Keep a usage history*; on by default).
 - **Settings** — Launch at Login, rate-chart style, history archive, and a per-vendor
   plan picker (preset tiers, a custom monthly amount, or API pay-as-you-go).
-- **Sources** — Claude Code and Codex, merged. Cost is always the **API-equivalent**
+- **Sources** — Claude Code, Codex, and WorkBuddy, merged. Cost is always the **API-equivalent**
   amount (LiteLLM prices), so it's meaningful whether you're on a subscription or API.
 
 ## How it reads your usage
@@ -48,6 +49,7 @@ a small parse cache. Per-day token and cost totals are verified to match
 |--------|----------|-------|
 | Claude Code | `$CLAUDE_CONFIG_DIR`, else `~/.config/claude` then `~/.claude` → `projects/**/*.jsonl` | Mirrors `ccusage`: globs all depths, dedups assistant turns by `message.id:requestId` keeping the max output, tags priority ("fast") turns at 6× price. Additional homes can be listed in `~/.config/tokenomics/sources.json`. |
 | Codex | `~/.codex`, plus `$CODEX_HOME` when set → `sessions/**/rollout-*.jsonl` | `token_count` events are counted per turn (`last_token_usage`; sub-turns don't advance the session cumulative), bucketed by local day; old rollouts fall back to cumulative deltas. Additional homes can be listed in `~/.config/tokenomics/sources.json`. |
+| WorkBuddy | `~/.workbuddy` → `projects/**/*.jsonl` | Every row carrying `providerData.rawUsage` is one billed request (a turn's `function_call` rows each carry their own usage); `prompt_tokens` includes the cached portion, so input = prompt − cache hit − cache write. Dedup by `messageId`. Additional homes can be listed in `~/.config/tokenomics/sources.json`. |
 | Pricing | [LiteLLM](https://github.com/BerriAI/litellm) model price JSON | Fetched and disk-cached (refreshed at most daily); a bundled snapshot is the fallback. Cost is recomputed from live prices, so updating prices never needs a rebuild. |
 
 Parsing is incremental: each file's parsed records are cached by `(mtime, size)`
@@ -56,7 +58,7 @@ changed log files are re-read on each refresh.
 
 ### Additional local environments
 
-Tokenomics can merge usage from additional Codex or Claude homes on the same Mac.
+Tokenomics can merge usage from additional Codex, Claude, or WorkBuddy homes on the same Mac.
 Create `~/.config/tokenomics/sources.json`; paths must be absolute or start with
 `~/`, and point to the agent home (the directory containing `sessions/` or
 `projects/`):
@@ -65,7 +67,8 @@ Create `~/.config/tokenomics/sources.json`; paths must be absolute or start with
 {
   "version": 1,
   "additionalCodexHomes": ["~/.codex-work"],
-  "additionalClaudeHomes": ["~/.claude-work"]
+  "additionalClaudeHomes": ["~/.claude-work"],
+  "additionalWorkbuddyHomes": ["~/.workbuddy-work"]
 }
 ```
 
@@ -89,7 +92,7 @@ bar today, a WidgetKit widget later) consumes the same normalized state.
 Sources/Tokenomics/
 ├── Core/                 # pure engine — no AppKit/SwiftUI
 │   ├── UsageProvider     # protocol: fetchDaily / fetchDailyByVendor / fetchDayMinuteMatrix
-│   ├── ClaudeNativeProvider, CodexProvider, CombinedProvider
+│   ├── ClaudeNativeProvider, CodexProvider, WorkBuddyProvider, CombinedProvider
 │   ├── FileRecordCache   # generic (mtime,size) parse cache + NDJSON persistence
 │   ├── Archive/          # durable per-record archive: ArchiveFile, ArchiveStore, UsageArchive
 │   ├── LineReader        # O(n) streaming JSONL reader (handles multi-MB lines)
@@ -151,6 +154,7 @@ The binary exits early on these flags (used to verify the readers and profile):
 |------|----------------|
 | `--dump-daily` | Claude per-day token + cost TSV (diff against `ccusage daily --json`) |
 | `--dump-codex` | Codex per-day token + cost TSV |
+| `--dump-workbuddy` | WorkBuddy per-day token + cost TSV |
 | `--dump-intraday` | Today's non-empty 5-minute buckets (combined) |
 | `--dump-curve` | Today / typical / projected end-of-day summary |
 | `--dump-peers` | Each iCloud peer file's manifest + a structure check |

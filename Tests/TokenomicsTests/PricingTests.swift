@@ -77,4 +77,18 @@ struct PricingSourceTests {
         #expect(fast.input == 0.00001 * Pricing.fastMultiplier)
         #expect(Pricing.resolve("claude-fable-5-20260601", in: table)?.input == 0.00001)
     }
+
+    @Test("WorkBuddy models price at their vendor's first-party rates")
+    func workBuddyModelsPriced() throws {
+        let table = PricingStore.layered(modelsDev: [:], liteLLM: [:])
+
+        let glm = try #require(Pricing.resolve("glm-5.2", in: table))
+        #expect(glm.input == 0.0000014)          // z.ai: $1.40/M
+        #expect(glm.cacheRead == 0.00000026)     // z.ai: $0.26/M cached input
+
+        let hy = try #require(Pricing.resolve("hy3", in: table))
+        #expect(hy.input == 0.00000014)          // Tencent ¥1/M ≈ $0.14/M
+
+        #expect(Pricing.resolve("deepseek-v4-flash", in: table)?.output == 0.00000132)
+    }
 }

@@ -69,6 +69,7 @@ struct UsageRecord: Codable, Equatable, Hashable {
 enum UsageSource: String, Codable, Equatable, Hashable {
     case claude = "c"
     case codex = "x"
+    case workbuddy = "w"
 }
 
 /// Cross-source dedup shared by every provider and (next) the cross-machine union.

@@ -46,7 +46,7 @@ enum Refreeze {
 
     static func run(days: [String], force: Bool) {
         let records: [UsageRecord] = waitFor { done in
-            CombinedProvider([ClaudeNativeProvider(), CodexProvider()]).fetchRecords(completion: done)
+            CombinedProvider([ClaudeNativeProvider(), CodexProvider(), WorkBuddyProvider()]).fetchRecords(completion: done)
         }
         guard let folder = LocalArchiveFolder() else {
             FileHandle.standardError.write(Data("archive folder unavailable\n".utf8))
@@ -317,7 +317,7 @@ enum DumpArchive {
 /// TOTAL, to sanity-check the intraday rate chart. Invoked with `--dump-intraday`.
 enum DumpIntraday {
     static func run() {
-        let provider = CombinedProvider([ClaudeNativeProvider(), CodexProvider()])
+        let provider = CombinedProvider([ClaudeNativeProvider(), CodexProvider(), WorkBuddyProvider()])
         let now = Date()
         let matrix = waitFor { provider.fetchDayMinuteMatrix(completion: $0) }
         let minutes = matrix[DayBucket.dayKey(now)] ?? Array(repeating: MinuteBucket(), count: 1440)
@@ -340,7 +340,7 @@ enum DumpIntraday {
 /// sanity-check the prediction. Invoked with `--dump-curve`.
 enum DumpCurve {
     static func run() {
-        let provider = CombinedProvider([ClaudeNativeProvider(), CodexProvider()])
+        let provider = CombinedProvider([ClaudeNativeProvider(), CodexProvider(), WorkBuddyProvider()])
         let now = Date()
         let full = waitFor { provider.fetchDayMinuteMatrix(completion: $0) }
         // Mirror UsageStore: merge first (CombinedProvider), then trim to the window.

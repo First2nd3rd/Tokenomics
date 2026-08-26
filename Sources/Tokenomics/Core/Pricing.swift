@@ -47,6 +47,16 @@ enum Pricing {
         "claude-haiku-4-5-20251001": ModelPricing(input: 0.000001, output: 0.000005, cacheCreation: 0.00000125, cacheRead: 0.0000001),
         // Codex GPT-5.5 — $5 / $30 / (no cache-creation) / $0.50 cache-read
         "gpt-5.5":                   ModelPricing(input: 0.000005, output: 0.000030, cacheCreation: 0, cacheRead: 0.0000005),
+        // WorkBuddy models, at each model VENDOR's own first-party list price (not
+        // the WorkBuddy/reseller channel). LiteLLM only carries these under
+        // provider-prefixed keys our resolver ignores; a bare live key, if one
+        // appears, overrides these.
+        // GLM-5.2 (z.ai list) — $1.40 / $4.40 / $0.26 cache-read
+        "glm-5.2":                   ModelPricing(input: 0.0000014, output: 0.0000044, cacheCreation: 0, cacheRead: 0.00000026),
+        // Hy3 (Tencent list ¥1 / ¥4 / ¥0.25 per M, ≈7.1 CNY/USD) — $0.14 / $0.56 / $0.035
+        "hy3":                       ModelPricing(input: 0.00000014, output: 0.00000056, cacheCreation: 0, cacheRead: 0.000000035),
+        // DeepSeek v4 flash (DeepSeek list, matches LiteLLM's bare key) — $0.44 / $1.32 / $0.014
+        "deepseek-v4-flash":         ModelPricing(input: 0.00000044, output: 0.00000132, cacheCreation: 0, cacheRead: 0.000000014),
     ]
 
     /// Resolve pricing for a model id against `table`:

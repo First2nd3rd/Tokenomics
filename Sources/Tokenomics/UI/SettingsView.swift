@@ -172,7 +172,7 @@ struct AboutPane: View {
                         .font(.title3.weight(.semibold))
                     Text("Version \(version)")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("Claude & Codex token usage, live in your menu bar.")
+                    Text("Claude, Codex & WorkBuddy token usage, live in your menu bar.")
                         .font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }

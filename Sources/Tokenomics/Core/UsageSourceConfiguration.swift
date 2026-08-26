@@ -9,17 +9,19 @@ enum UsageSourceConfiguration {
     struct Homes: Equatable {
         let codex: [URL]
         let claude: [URL]
+        let workbuddy: [URL]
 
-        static let empty = Homes(codex: [], claude: [])
+        static let empty = Homes(codex: [], claude: [], workbuddy: [])
     }
 
     private struct FileContents: Decodable {
         let version: Int
         let additionalCodexHomes: [String]
         let additionalClaudeHomes: [String]
+        let additionalWorkbuddyHomes: [String]
 
         enum CodingKeys: String, CodingKey {
-            case version, additionalCodexHomes, additionalClaudeHomes
+            case version, additionalCodexHomes, additionalClaudeHomes, additionalWorkbuddyHomes
         }
 
         init(from decoder: Decoder) throws {
@@ -29,6 +31,8 @@ enum UsageSourceConfiguration {
                 [String].self, forKey: .additionalCodexHomes) ?? []
             additionalClaudeHomes = try values.decodeIfPresent(
                 [String].self, forKey: .additionalClaudeHomes) ?? []
+            additionalWorkbuddyHomes = try values.decodeIfPresent(
+                [String].self, forKey: .additionalWorkbuddyHomes) ?? []
         }
     }
 
@@ -45,7 +49,8 @@ enum UsageSourceConfiguration {
 
         return Homes(
             codex: uniqueURLs(contents.additionalCodexHomes.compactMap { resolve($0, home: home) }),
-            claude: uniqueURLs(contents.additionalClaudeHomes.compactMap { resolve($0, home: home) })
+            claude: uniqueURLs(contents.additionalClaudeHomes.compactMap { resolve($0, home: home) }),
+            workbuddy: uniqueURLs(contents.additionalWorkbuddyHomes.compactMap { resolve($0, home: home) })
         )
     }
 

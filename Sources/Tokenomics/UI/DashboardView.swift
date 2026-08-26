@@ -484,9 +484,9 @@ struct DashboardView: View {
     }
 
     /// Vendor color, taken from the same palette as the by-model rate chart so the
-    /// two surfaces match (Claude orange, GPT teal).
+    /// two surfaces match (Claude orange, GPT teal, WorkBuddy purple).
     private func vendorColor(_ vendor: Vendor) -> Color {
-        ModelColors.color(for: vendor == .claude ? "claude" : "gpt")
+        ModelColors.color(for: vendor.representativeModel)
     }
 
     // MARK: - By-machine breakdown (cross-machine sync)

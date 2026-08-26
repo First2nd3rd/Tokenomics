@@ -32,7 +32,8 @@ final class UsageStore {
     private let isArchiveEnabled: () -> Bool
     private let deliver: (@escaping () -> Void) -> Void
 
-    init(localProviders: [UsageProvider] = [ClaudeNativeProvider(), CodexProvider()],
+    init(localProviders: [UsageProvider] = [ClaudeNativeProvider(), CodexProvider(),
+                                            WorkBuddyProvider()],
          folder: PeerFolder = ICloudDriveFolder(),
          archive: UsageArchive? = LocalArchiveFolder().map { UsageArchive(folder: $0) },
          snapshots: SnapshotStore? = SnapshotStore(),

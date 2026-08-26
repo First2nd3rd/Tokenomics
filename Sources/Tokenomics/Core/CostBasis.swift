@@ -1,14 +1,17 @@
 import Foundation
 
 /// A billing vendor the break-even view compares against a subscription. Maps 1:1
-/// to a usage provider (Claude ← claude-native, GPT ← codex).
+/// to a usage provider (Claude ← claude-native, GPT ← codex, WorkBuddy ←
+/// workbuddy). WorkBuddy has no subscription fee, so it stays out of the
+/// break-even computations and only contributes usage rows.
 enum Vendor: String, CaseIterable {
-    case claude, gpt
+    case claude, gpt, workbuddy
 
     var displayName: String {
         switch self {
         case .claude: return "Claude"
         case .gpt: return "GPT"
+        case .workbuddy: return "WorkBuddy"
         }
     }
 
@@ -17,6 +20,17 @@ enum Vendor: String, CaseIterable {
         switch self {
         case .claude: return "claude-native"
         case .gpt: return "codex"
+        case .workbuddy: return "workbuddy"
+        }
+    }
+
+    /// Model id whose hue stands for this vendor (`ModelColors` keys hues off model
+    /// prefixes), so vendor bars match the by-model chart's palette.
+    var representativeModel: String {
+        switch self {
+        case .claude: return "claude"
+        case .gpt: return "gpt"
+        case .workbuddy: return "hy"    // non-Claude/GPT prefix → the purple hue
         }
     }
 }
