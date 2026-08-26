@@ -263,11 +263,63 @@ enum ChartKit {
         return stride(from: 0, to: months.count, by: step).map { months[$0].month }
     }
 
+    /// Daily cache-hit-rate line: each active day's cache reads as a share of its
+    /// prompt tokens. Rates live in the 80–100% band, and the movement THERE is
+    /// what the chart is for — so the y-axis floor comes from the 10th percentile
+    /// (10%-stepped, never above 90%), which one collapsed day can't drag to zero.
+    /// A below-floor outlier pins to the bottom edge as an orange point — visibly
+    /// "off the scale" without a text annotation cluttering the plot. Drawn in
+    /// the Cache read band's blue.
+    static func cacheRateLine(_ days: [DailyUsage], width: CGFloat, height: CGFloat = 100) -> some View {
+        let points = days.compactMap { d in d.cacheHitRate.map { (day: d.date, rate: $0) } }
+        let lower = rateAxisFloor(points.map(\.rate))
+        return Chart {
+            ForEach(points, id: \.day) { point in
+                LineMark(x: .value("Day", point.day), y: .value("Rate", max(point.rate, lower)))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(.blue)
+            }
+            ForEach(points.filter { $0.rate < lower }, id: \.day) { point in
+                PointMark(x: .value("Day", point.day), y: .value("Rate", lower))
+                    .foregroundStyle(.orange)
+                    .symbolSize(28)
+            }
+        }
+        .chartYScale(domain: lower...1)
+        .chartXAxis {
+            AxisMarks(values: sparseKeys(points.map(\.day))) { value in
+                AxisValueLabel { if let d = value.as(String.self) { Text(Format.shortMonthDay(d)) } }
+            }
+        }
+        .chartYAxis {
+            AxisMarks { value in
+                AxisGridLine()
+                AxisValueLabel { if let r = value.as(Double.self) { Text(Format.percent(r)) } }
+            }
+        }
+        .frame(width: width, height: height)
+    }
+
+    /// The rate chart's y-axis floor: the 10th percentile of the rates, rounded
+    /// down to a 10% step and capped at 0.9 (an all-100% month still gets a
+    /// band). Percentile, not minimum, so a single collapsed day stays an
+    /// annotated outlier instead of flattening the whole axis.
+    static func rateAxisFloor(_ rates: [Double]) -> Double {
+        let sorted = rates.sorted()
+        guard !sorted.isEmpty else { return 0.9 }
+        let p10 = sorted[Int(Double(sorted.count - 1) * 0.1)]
+        return min((p10 * 10).rounded(.down) / 10, 0.9)
+    }
+
     /// ~6 evenly spaced day keys to label so a month of bars doesn't crowd the axis.
     private static func sparseLabels(_ days: [DailyUsage]) -> [String] {
-        guard !days.isEmpty else { return [] }
-        let step = max(1, days.count / 6)
-        return stride(from: 0, to: days.count, by: step).map { days[$0].date }
+        sparseKeys(days.map(\.date))
+    }
+
+    private static func sparseKeys(_ keys: [String]) -> [String] {
+        guard !keys.isEmpty else { return [] }
+        let step = max(1, keys.count / 6)
+        return stride(from: 0, to: keys.count, by: step).map { keys[$0] }
     }
 
     /// Page dots (click a dot to jump), shared by the popover chart decks and the

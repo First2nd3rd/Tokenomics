@@ -45,6 +45,11 @@ enum Format {
         return "$" + (formatter.string(from: NSNumber(value: c)) ?? String(format: "%.0f", c))
     }
 
+    /// A 0…1 fraction as a whole percent: 0.874 → "87%".
+    static func percent(_ x: Double) -> String {
+        String(format: "%.0f%%", x * 100)
+    }
+
     /// Payback multiple like "2.3×" (one decimal under 10×, whole number beyond).
     static func multiple(_ x: Double) -> String {
         x >= 10 ? String(format: "%.0f×", x) : String(format: "%.1f×", x)

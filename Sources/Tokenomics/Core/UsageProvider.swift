@@ -13,6 +13,28 @@ struct DailyUsage: Codable, Equatable {
     let models: [String]
 }
 
+extension DailyUsage {
+    /// Prompt-side tokens — everything the API processed as input context.
+    /// Output tokens are generation, never cache-eligible, so they stay out.
+    var promptTokens: Int { inputTokens + cacheCreationTokens + cacheReadTokens }
+
+    /// Share of the day's prompt tokens served from cache (0…1). nil when the day
+    /// had no prompt side to rate.
+    var cacheHitRate: Double? {
+        promptTokens > 0 ? Double(cacheReadTokens) / Double(promptTokens) : nil
+    }
+
+    /// Prompt-weighted rate across days (Σ reads ÷ Σ prompt) — NOT a mean of the
+    /// daily rates, so a tiny day can't drag the period figure around. nil when no
+    /// day had a prompt side.
+    static func cacheHitRate(across days: [DailyUsage]) -> Double? {
+        let prompt = days.reduce(0) { $0 + $1.promptTokens }
+        guard prompt > 0 else { return nil }
+        let reads = days.reduce(0) { $0 + $1.cacheReadTokens }
+        return Double(reads) / Double(prompt)
+    }
+}
+
 /// A source of usage data. Callback-based rather than async/await to avoid
 /// Swift-6 actor-isolation ceremony until the project adopts strict concurrency.
 ///

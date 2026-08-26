@@ -166,10 +166,35 @@ struct ReportView: View {
                 }
                 .padding(.vertical, 2)
             }
+            cacheRateSection(r)
         }
         if !r.byVendor.isEmpty { Section("By Vendor") { VendorRows(vendors: r.byVendor, width: chartWidth) } }
         if !r.byModel.isEmpty { Section("By Model") { ModelRows(models: r.byModel, width: chartWidth) } }
         Section("Stats") { statsGrid(r) }
+    }
+
+    /// Daily cache-hit-rate line for the month — how much of each day's prompt
+    /// side came from cache. Needs two rated days to draw a line at all.
+    @ViewBuilder private func cacheRateSection(_ r: PeriodReport) -> some View {
+        let rated = r.days.filter { $0.cacheHitRate != nil }
+        if rated.count >= 2 {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    ChartKit.cacheRateLine(r.days, width: chartWidth)
+                    Text("Cache reads ÷ prompt tokens (input + cache write + cache read)")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+            } header: {
+                HStack(spacing: 8) {
+                    Text("Cache Hit Rate")
+                    if let average = DailyUsage.cacheHitRate(across: r.days) {
+                        Text("avg \(Format.percent(average))")
+                            .font(.caption).fontWeight(.regular).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
     }
 
     private func copyMarkdown(_ r: PeriodReport) {
