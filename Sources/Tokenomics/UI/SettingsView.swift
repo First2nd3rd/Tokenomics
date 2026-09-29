@@ -78,6 +78,7 @@ struct DataPane: View {
     @AppStorage("syncEnabled") private var syncEnabled = false
     @AppStorage(DeviceIdentity.displayNameKey) private var machineName = ""
     @AppStorage("archiveEnabled") private var archiveEnabled = true
+    @State private var importedNames: [String] = []
 
     var body: some View {
         Form {
@@ -108,10 +109,16 @@ struct DataPane: View {
             } header: {
                 Text("History Archive")
             } footer: {
-                Text("Preserve a permanent daily/monthly history on this Mac so reports survive Claude clearing its logs. Only token counts are stored — about 5 MB per month in Application Support.")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Preserve a permanent daily/monthly history on this Mac so reports survive Claude clearing its logs. Only token counts are stored — about 5 MB per month in Application Support.")
+                    if !importedNames.isEmpty {
+                        Text("Reports also include history imported from \(importedNames.joined(separator: ", ")).")
+                    }
+                }
             }
         }
         .formStyle(.grouped)
+        .onAppear { importedNames = ImportedHistory.infos().map(\.displayName) }
     }
 }
 

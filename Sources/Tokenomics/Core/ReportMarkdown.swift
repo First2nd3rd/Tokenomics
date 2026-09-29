@@ -4,7 +4,7 @@ import Foundation
 /// window and for `--dump-archive`. Pure and deterministic given the report, so it
 /// is easy to test and the same text drives both paths.
 enum ReportMarkdown {
-    static func make(_ r: PeriodReport, syncOn: Bool = false) -> String {
+    static func make(_ r: PeriodReport, syncOn: Bool = false, importedNames: [String] = []) -> String {
         var out = "# Usage Report — \(r.title)\n\n"
 
         out += "**\(Format.tokensShort(r.total.total)) tokens · \(Format.cost(r.cost))**"
@@ -16,7 +16,8 @@ enum ReportMarkdown {
             out += "Projected ~\(Format.tokensShort(pt)) · ~\(Format.cost(pc))\n"
         }
 
-        var notes = ["This Mac"]
+        var notes = [importedNames.isEmpty
+                     ? "This Mac" : "This Mac + imported \(importedNames.joined(separator: ", "))"]
         if !r.pricesFrozen { notes.append("estimated at current prices") }
         if syncOn { notes.append("excludes other Macs") }
         out += "_\(notes.joined(separator: " · "))_\n"

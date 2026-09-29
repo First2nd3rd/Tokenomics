@@ -94,7 +94,8 @@ struct ReportView: View {
 
     @ViewBuilder private func content(_ r: PeriodReport) -> some View {
         if r.period == .all {
-            OverviewSections(r: r, syncOn: model.syncOn, chartWidth: chartWidth)
+            OverviewSections(r: r, syncOn: model.syncOn, importedNames: model.importedNames,
+                             chartWidth: chartWidth)
         } else {
             periodSections(r)
         }
@@ -199,7 +200,9 @@ struct ReportView: View {
 
     private func copyMarkdown(_ r: PeriodReport) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(ReportMarkdown.make(r, syncOn: model.syncOn), forType: .string)
+        NSPasteboard.general.setString(ReportMarkdown.make(r, syncOn: model.syncOn,
+                                                           importedNames: model.importedNames),
+                                       forType: .string)
         copied = true
     }
 
@@ -220,7 +223,8 @@ struct ReportView: View {
                         .font(.caption).foregroundStyle(Color.accentColor)
                 }
             }
-            ReportCaveats(syncOn: model.syncOn, pricesFrozen: r.pricesFrozen)
+            ReportCaveats(syncOn: model.syncOn, pricesFrozen: r.pricesFrozen,
+                          importedNames: model.importedNames)
         }
         .padding(.vertical, 2)
     }

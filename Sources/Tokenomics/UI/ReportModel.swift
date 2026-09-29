@@ -11,6 +11,8 @@ final class ReportModel: ObservableObject {
     @Published private(set) var isLoading = false
     /// Whether sync is on — the report is this-Mac-only, so the view notes the gap.
     @Published var syncOn = false
+    /// Retired Macs whose imported history the report folds in, for the scope note.
+    @Published var importedNames: [String] = []
 
     private let loader: (ReportPeriod, Date, @escaping (PeriodReport?) -> Void) -> Void
 

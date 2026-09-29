@@ -52,8 +52,14 @@ struct LocalArchiveFolder: ArchiveFolder {
     }
 
     func segmentURLs() -> [URL] {
-        guard let dir = directoryURL,
-              let urls = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        guard let dir = directoryURL else { return [] }
+        return Self.segmentURLs(in: dir)
+    }
+
+    /// Segment files in `dir`, or none if it doesn't exist — probes a directory
+    /// (e.g. an export being imported) without creating it.
+    static func segmentURLs(in dir: URL) -> [URL] {
+        guard let urls = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
         else { return [] }
         return urls.filter { archiveMonth(fromSegmentName: $0.lastPathComponent) != nil }
     }

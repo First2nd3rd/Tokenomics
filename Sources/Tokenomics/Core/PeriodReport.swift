@@ -267,7 +267,7 @@ struct PeriodReport: Codable, Equatable {
     }
 
     /// Sum per-vendor counts + cost across days, sorted by tokens descending.
-    private static func mergeVendors(_ entries: [VendorUsage]) -> [VendorUsage] {
+    static func mergeVendors(_ entries: [VendorUsage]) -> [VendorUsage] {
         var counts: [String: TokenCounts] = [:]
         var costs: [String: Double] = [:]
         for e in entries {
@@ -279,7 +279,7 @@ struct PeriodReport: Codable, Equatable {
     }
 
     /// Sum per-model counts + cost across days, sorted by tokens descending.
-    private static func mergeModels(_ entries: [ModelUsage]) -> [ModelUsage] {
+    static func mergeModels(_ entries: [ModelUsage]) -> [ModelUsage] {
         var counts: [String: TokenCounts] = [:]
         var costs: [String: Double] = [:]
         for e in entries {

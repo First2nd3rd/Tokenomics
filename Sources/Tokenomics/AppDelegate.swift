@@ -16,16 +16,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let liveWindowMinutes = 60
 
     private var statusItem: NSStatusItem!
-    private let store = UsageStore()
+    private let store = UsageStore(imported: ImportedHistory.load())
     private let model = DashboardModel()
     private let popover = NSPopover()
     private let loginItem = LoginItemModel()
     private var settingsWindow: NSWindow?
     private let paneModel = SettingsPaneModel()
-    private lazy var reportModel = ReportModel { [weak self] period, anchor, completion in
-        guard let self else { completion(nil); return }
-        self.store.report(period: period, anchor: anchor, completion: completion)
-    }
+    private lazy var reportModel: ReportModel = {
+        let model = ReportModel { [weak self] period, anchor, completion in
+            guard let self else { completion(nil); return }
+            self.store.report(period: period, anchor: anchor, completion: completion)
+        }
+        model.importedNames = store.importedMachineNames
+        return model
+    }()
     private var timer: Timer?
     private var lastSyncEnabled = false
     private var lastArchiveEnabled = false

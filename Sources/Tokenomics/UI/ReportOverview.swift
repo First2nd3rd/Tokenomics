@@ -7,6 +7,7 @@ import SwiftUI
 struct OverviewSections: View {
     let r: PeriodReport
     let syncOn: Bool
+    var importedNames: [String] = []
     let chartWidth: CGFloat
 
     /// Monthly deck page (by type / by model / cost), persisted like the other
@@ -37,7 +38,7 @@ struct OverviewSections: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            ReportCaveats(syncOn: syncOn, pricesFrozen: r.pricesFrozen)
+            ReportCaveats(syncOn: syncOn, pricesFrozen: r.pricesFrozen, importedNames: importedNames)
         }
         .padding(.vertical, 2)
     }

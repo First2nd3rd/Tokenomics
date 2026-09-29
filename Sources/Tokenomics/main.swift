@@ -45,6 +45,10 @@ if CommandLine.arguments.contains("--bench-report") {
 if CommandLine.arguments.contains("--verify-report") {
     VerifyReport.run()   // exits itself with the check status
 }
+if let flagIndex = CommandLine.arguments.firstIndex(of: "--import-history") {
+    let path = CommandLine.arguments.dropFirst(flagIndex + 1).first { !$0.hasPrefix("--") }
+    ImportHistory.run(path: path)   // exits itself with the import status
+}
 if let flagIndex = CommandLine.arguments.firstIndex(of: "--refreeze") {
     let days = CommandLine.arguments.dropFirst(flagIndex + 1).filter {
         $0.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", options: .regularExpression) != nil

@@ -17,7 +17,7 @@ private func waitFor<T>(_ fetch: (@escaping (T) -> Void) -> Void) -> T {
 enum BenchReport {
     static func run() {
         // Deliver inline: this CLI has no main run loop to drain the default hop.
-        let store = UsageStore(deliver: { work in work() })
+        let store = UsageStore(imported: ImportedHistory.load(), deliver: { work in work() })
         for period in [ReportPeriod.day, .week, .month] {
             for attempt in 1...2 {
                 let start = Date()
@@ -120,6 +120,39 @@ enum Refreeze {
     }
 }
 
+/// Imports a retired Mac's exported history (`--import-history <path>`), where the
+/// path is its `me.stfang.tokenomics` Application Support folder or that folder's
+/// parent. Writes only under `imported/`, never this Mac's own archive, so it is
+/// safe with the app running — relaunch it to see the history in reports.
+enum ImportHistory {
+    static func run(path: String?) {
+        guard let path, let root = ImportedHistory.defaultRoot else {
+            FileHandle.standardError.write(Data("usage: --import-history <export folder>\n".utf8))
+            exit(2)
+        }
+        let source = URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+        do {
+            let s = try ImportedHistory.importExport(
+                from: source, into: root, localMachineId: DeviceIdentity.id,
+                localArchive: LocalArchiveFolder().map { UsageArchive(folder: $0) })
+            print("imported \(s.displayName) (\(s.machineId))\(s.replacedPrevious ? ", replacing the previous import" : "")")
+            print("  records:        \(s.recordCount) across \(s.months.joined(separator: ", "))")
+            print("  frozen days:    \(s.snapshotDays) (\(s.firstDay ?? "-") → \(s.lastDay ?? "-"))")
+            print("  frozen now:     \(s.frozenAtImport.isEmpty ? "none" : s.frozenAtImport.joined(separator: ", "))")
+            print("  overlap w/ Mac: \(s.overlapWithLocal) record keys")
+            print("  stored in:      \(root.appendingPathComponent(s.machineId).path)")
+            if s.overlapWithLocal > 0 {
+                print("WARNING: \(s.overlapWithLocal) records are also in this Mac's archive — reports will count them twice")
+            }
+            print("Relaunch Tokenomics to include it in reports.")
+            exit(0)
+        } catch {
+            FileHandle.standardError.write(Data("import failed: \(error)\n".utf8))
+            exit(1)
+        }
+    }
+}
+
 /// Builds every Statistics period against REAL data and checks the invariants the
 /// sub-pages rely on: per-day rows sum to the period total, and each period's
 /// alternate chart (hourly / week slots / weekly rollup) preserves that total.
@@ -127,7 +160,7 @@ enum Refreeze {
 /// Invoked with `--verify-report`.
 enum VerifyReport {
     static func run() {
-        let store = UsageStore(deliver: { work in work() })
+        let store = UsageStore(imported: ImportedHistory.load(), deliver: { work in work() })
         var failures = 0
         func check(_ name: String, _ ok: Bool) {
             print("\(ok ? "ok " : "FAIL") \(name)")
@@ -164,9 +197,14 @@ enum VerifyReport {
                 check("All: monthly rollup sums to total", monthly == r.total.total)
             }
             // The all-time day list spans the whole archive — the per-day dump
-            // stays scoped to the calendar periods.
+            // stays scoped to the calendar periods; all time dumps its months.
             if period != .all {
                 for day in r.days { print("\(period.label) \(day.date) \(day.totalTokens)") }
+            } else {
+                print("\(period.label) total \(r.total.total) cost \(String(format: "%.2f", r.cost)) days \(r.activeDays)")
+                for month in r.months ?? [] {
+                    print("\(period.label) \(month.month) \(month.tokens) \(String(format: "%.2f", month.cost))")
+                }
             }
         }
         exit(failures == 0 ? 0 : 1)
@@ -301,6 +339,15 @@ enum DumpArchive {
             print("  schema:       \(m.schemaVersion)")
             print("  recordCount:  manifest=\(m.recordCount)  actual=\(contents.records.count)  \(m.recordCount == contents.records.count ? "✓" : "✗ MISMATCH")")
             print("  updatedAt:    \(Date(timeIntervalSince1970: TimeInterval(m.updatedAt)))")
+            print("")
+        }
+
+        for machine in ImportedHistory.load() {
+            let months = machine.archive.availableMonths()
+            print("===== imported: \(machine.displayName) (\(machine.machineId)) =====")
+            print("  segments:     \(months.joined(separator: ", "))")
+            print("  records:      \(machine.archive.allRecords().count)")
+            print("  frozen days:  \(machine.snapshots.snapshots().count)")
             print("")
         }
 

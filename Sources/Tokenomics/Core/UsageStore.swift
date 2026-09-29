@@ -27,6 +27,7 @@ final class UsageStore {
     private let publisher: PeerPublisher
     private let archive: UsageArchive?
     private let snapshots: SnapshotStore?
+    private let imported: [ImportedMachine]
     private let machineId: String
     private let isSyncEnabled: () -> Bool
     private let isArchiveEnabled: () -> Bool
@@ -37,6 +38,9 @@ final class UsageStore {
          folder: PeerFolder = ICloudDriveFolder(),
          archive: UsageArchive? = LocalArchiveFolder().map { UsageArchive(folder: $0) },
          snapshots: SnapshotStore? = SnapshotStore(),
+         // Opt-in rather than read from disk by default, so a store built for a test
+         // can never pick up this Mac's real imported history.
+         imported: [ImportedMachine] = [],
          machineId: String = DeviceIdentity.id,
          isSyncEnabled: @escaping () -> Bool = { UserDefaults.standard.bool(forKey: "syncEnabled") },
          isArchiveEnabled: @escaping () -> Bool = { UserDefaults.standard.bool(forKey: "archiveEnabled") },
@@ -46,6 +50,7 @@ final class UsageStore {
         self.publisher = PeerPublisher(folder: folder, machineId: machineId)
         self.archive = archive
         self.snapshots = snapshots
+        self.imported = imported
         self.machineId = machineId
         self.isSyncEnabled = isSyncEnabled
         self.isArchiveEnabled = isArchiveEnabled
@@ -262,6 +267,7 @@ final class UsageStore {
                              now: Date, liveRecords: [UsageRecord]?,
                              completion: @escaping (PeriodReport?) -> Void) {
         let snapshots = self.snapshots
+        let imported = self.imported
         DispatchQueue.global(qos: .userInitiated).async { [deliver] in
             let todayKey = DayBucket.dayKey(now)
             let pricedAt = Int(now.timeIntervalSince1970)
@@ -293,19 +299,40 @@ final class UsageStore {
                 today = UsageAggregator.daySummaries(todayCollapsed, pricedAt: pricedAt,
                                                      frozen: false, assumeCollapsed: true)
             }
+            // Retired Macs' imported history, per machine: its frozen days, plus its
+            // archive for any day it never froze. It is static, so unlike this Mac
+            // even a snapshot dated today stands. Machines are summed by date below.
+            var importedDays: [DaySnapshot] = []
+            var importedRecords: [UsageRecord] = []
+            for machine in imported {
+                let machineFrozen = machine.snapshots.snapshots()
+                let months = period == .all ? machine.archive.availableMonths() : segments
+                let records = machine.archive.records(forMonths: months)
+                importedDays += machineFrozen + UsageAggregator
+                    .daySummaries(records, pricedAt: pricedAt, frozen: false, assumeCollapsed: true,
+                                  excludingDays: Set(machineFrozen.map(\.date)))
+                importedRecords += records
+            }
+            let daySummaries = imported.isEmpty
+                ? frozen + archived + today
+                : DaySnapshot.mergedByDate(frozen + archived + today + importedDays)
             // The day view swaps the (single-bar) daily chart for an hour-of-day
             // one: today buckets the live stream, a past day its archive records.
             // Coarse epoch bounds prune the 3-month archive union with Int compares
             // before any per-record calendar math.
             let startEpoch = Int(range.start.timeIntervalSince1970)
             let endEpoch = Int(range.end.timeIntervalSince1970)
+            let importedInRange = period == .day || period == .week
+                ? importedRecords.filter { $0.epoch >= startEpoch && $0.epoch < endEpoch } : []
             var hourly: [TokenCounts]?
             if period == .day {
                 if let todayCollapsed, range.key == todayKey {
-                    hourly = UsageAggregator.hourlyCounts(collapsed: todayCollapsed, day: range.key)
+                    hourly = UsageAggregator.hourlyCounts(collapsed: todayCollapsed + importedInRange,
+                                                          day: range.key)
                 } else {
                     let dayRecords = archiveRecords.filter { $0.epoch >= startEpoch && $0.epoch < endEpoch }
-                    hourly = UsageAggregator.hourlyCounts(collapsed: dayRecords, day: range.key)
+                    hourly = UsageAggregator.hourlyCounts(collapsed: dayRecords + importedInRange,
+                                                          day: range.key)
                 }
             }
             // The week view's click-to-toggle density: PER-HOUR slots across every
@@ -326,11 +353,12 @@ final class UsageStore {
                         && (todayCollapsed == nil || r.epoch < todayStartEpoch)
                 }
                 if let todayCollapsed { slotRecords += todayCollapsed }
+                slotRecords += importedInRange
                 fine = UsageAggregator.slotCounts(collapsed: slotRecords, days: dayKeys, slotHours: 1)
             }
             let report = period == .all
-                ? PeriodReport.makeAllTime(daySummaries: frozen + archived + today, now: now)
-                : PeriodReport.make(daySummaries: frozen + archived + today,
+                ? PeriodReport.makeAllTime(daySummaries: daySummaries, now: now)
+                : PeriodReport.make(daySummaries: daySummaries,
                                     period: period, anchor: anchor, now: now,
                                     hourly: hourly, fine: fine)
             deliver { completion(report) }
@@ -348,7 +376,14 @@ final class UsageStore {
     }
 
     /// Months ("YYYY-MM") the archive holds, ascending — bounds the report navigator.
-    func archivedMonths() -> [String] { archive?.availableMonths() ?? [] }
+    /// Includes months only imported history covers.
+    func archivedMonths() -> [String] {
+        let months = (archive?.availableMonths() ?? []) + imported.flatMap { $0.archive.availableMonths() }
+        return Set(months).sorted()
+    }
+
+    /// Display names of the retired Macs whose imported history reports include.
+    var importedMachineNames: [String] { imported.map(\.displayName) }
 
     /// One-time (idempotent) backfill of all currently-available history into the
     /// archive. No-op when archiving is off, or when already backfilled unless `force`

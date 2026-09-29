@@ -83,6 +83,26 @@ gone. Ingest is idempotent (collapse + whole-segment atomic rewrite), only token
 counts are stored — never prompts, paths, or keys — and it's ~5 MB/month. Toggle it
 in Settings (on by default).
 
+### Keeping a retired Mac's history
+
+Before giving a Mac away, copy its `~/Library/Application Support/me.stfang.tokenomics/`
+folder somewhere safe, then on the Mac you keep (with the same Tokenomics build):
+
+```bash
+/Applications/Tokenomics.app/Contents/MacOS/Tokenomics --import-history <that folder or its parent>
+```
+
+The history lands read-only under `Application Support/me.stfang.tokenomics/imported/<machine-id>/`
+and every report (day / week / month / all time) folds it in, summed with this Mac
+by day; the report notes which Macs it includes. It is never merged into this Mac's
+own archive, which ingest and the daily snapshot sweep rewrite as this Mac's alone.
+The export's frozen daily costs are kept verbatim; any day it never froze (e.g. the
+partial export day) is frozen at import. Re-importing a newer export of that Mac
+replaces the imported copy, so repairs made there carry over; an older export, one
+missing a month or day the copy holds, or this Mac's own export is refused, and a
+failed write leaves the previous copy untouched. Relaunch the app afterwards.
+The live dashboard is unaffected — a synced Mac drops out of it 7 days after it stops publishing.
+
 ## Architecture
 
 The compute core is pure and decoupled from presentation, so every surface (menu
@@ -94,7 +114,7 @@ Sources/Tokenomics/
 │   ├── UsageProvider     # protocol: fetchDaily / fetchDailyByVendor / fetchDayMinuteMatrix
 │   ├── ClaudeNativeProvider, CodexProvider, WorkBuddyProvider, CombinedProvider
 │   ├── FileRecordCache   # generic (mtime,size) parse cache + NDJSON persistence
-│   ├── Archive/          # durable per-record archive: ArchiveFile, ArchiveStore, UsageArchive
+│   ├── Archive/          # durable per-record archive: ArchiveFile, ArchiveStore, UsageArchive, ImportedHistory
 │   ├── LineReader        # O(n) streaming JSONL reader (handles multi-MB lines)
 │   ├── Pricing / PricingStore
 │   ├── Dashboard         # headline / recent-average
@@ -158,7 +178,9 @@ The binary exits early on these flags (used to verify the readers and profile):
 | `--dump-intraday` | Today's non-empty 5-minute buckets (combined) |
 | `--dump-curve` | Today / typical / projected end-of-day summary |
 | `--dump-peers` | Each iCloud peer file's manifest + a structure check |
-| `--dump-archive` | Each archive segment's manifest + a current-month Markdown report |
+| `--dump-archive` | Each archive segment's manifest, imported Macs, + a current-month Markdown report |
+| `--verify-report` | Checks every report period's invariants against real data (all time adds a per-month dump) |
+| `--import-history <dir>` | Imports a retired Mac's exported history (see above) |
 | `--scan-only` | Stream every Claude line without decoding (isolates reader memory) |
 | `--bench` | Times a cold vs warm read on one provider |
 

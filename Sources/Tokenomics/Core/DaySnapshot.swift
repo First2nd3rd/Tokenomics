@@ -24,4 +24,23 @@ struct DaySnapshot: Codable, Equatable, Identifiable {
         case date = "d", total = "t", cost = "c", pricedAt = "pa",
              frozen = "f", byVendor = "v", byModel = "m"
     }
+
+    /// One summary per date: summaries sharing a date (the same day on different
+    /// machines) are summed, ascending by date. `PeriodReport` treats each entry as
+    /// a distinct day, so a report blending machines must merge first. A date with a
+    /// single summary passes through unchanged; a merged day is frozen only if every
+    /// part was.
+    static func mergedByDate(_ days: [DaySnapshot]) -> [DaySnapshot] {
+        Dictionary(grouping: days, by: \.date).map { date, parts in
+            guard parts.count > 1 else { return parts[0] }
+            var total = TokenCounts()
+            for part in parts { total.add(part.total) }
+            return DaySnapshot(date: date, total: total, cost: parts.reduce(0) { $0 + $1.cost },
+                               pricedAt: parts.map(\.pricedAt).max() ?? 0,
+                               frozen: parts.allSatisfy(\.frozen),
+                               byVendor: PeriodReport.mergeVendors(parts.flatMap(\.byVendor)),
+                               byModel: PeriodReport.mergeModels(parts.flatMap(\.byModel)))
+        }
+        .sorted { $0.date < $1.date }
+    }
 }

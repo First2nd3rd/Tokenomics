@@ -72,9 +72,19 @@ struct ModelRows: View {
 struct ReportCaveats: View {
     let syncOn: Bool
     let pricesFrozen: Bool
+    var importedNames: [String] = []
+
+    private var importedScope: String {
+        let names = importedNames.joined(separator: ", ")
+        let tail = syncOn ? " — excludes other Macs syncing to the dashboard." : "."
+        return "This Mac plus imported history from \(names)\(tail)"
+    }
 
     var body: some View {
-        if syncOn {
+        if !importedNames.isEmpty {
+            Text(importedScope)
+                .font(.caption2).foregroundStyle(.secondary)
+        } else if syncOn {
             Text("This Mac only — excludes the other Macs shown on the dashboard.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
